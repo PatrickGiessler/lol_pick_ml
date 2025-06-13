@@ -1,0 +1,3 @@
+**/__pycache__/** 
+model/saved_model/**
+.env

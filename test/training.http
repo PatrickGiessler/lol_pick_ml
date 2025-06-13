@@ -1,0 +1,16 @@
+@hostname = http://127.0.0.1
+@port = 8111
+@host = {{hostname}}:{{port}}
+@endpoint = /predict
+
+### calc from lokal Data
+GET  {{host}}/train
+Content-Type: application/json
+
+### PREDICT
+POST {{host}}{{endpoint}}
+Content-Type: application/json
+
+{
+  "input": [0.1, 0.5, 0.3, 0.2]
+}

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.model import ChampionPredictor
+from app.predictor import ChampionPredictor
 from train.trainer import ChampionTrainer
 from app.schemas import PredictParams, PredictRequest, PredictResponse, TrainResponse
 from train.fetcher import DataFetcher

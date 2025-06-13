@@ -19,8 +19,10 @@ def train():
     return TrainResponse(message="Training completed and model saved.")
 
 @router.post("/predict", response_model=PredictResponse)
-def predict():
-    predictor = ChampionPredictor("model/saved_model/test.keras", ally_ids=[0, 24], enemy_ids=[120, 142], bans=[1, 2], role_id=1)
+def predict(params: PredictParams):
+    
+    predictor = ChampionPredictor("model/saved_model/test.keras", ally_ids=params.ally_ids,
+                                  enemy_ids=params.enemy_ids, bans=params.bans, role_id=params.role_id,available_champions=params.available_champions)
 
     top_champs = predictor.reccommend(
         top_n=5

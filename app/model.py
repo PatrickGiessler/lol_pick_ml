@@ -17,16 +17,17 @@ class ChampionPredictor:
     enemy_ids: List[int] = []  # List to store enemy champion IDs
     bans: List[int] = []  # List to store banned champion IDs
     role_id: int = 0  # Role index (0–4)
-    available_champions: List[int] = np.arange(champion_count).tolist() # List of available champion IDs
     input_vector= list[float] # Input vector for the model
-    def __init__(self, model_path: str, ally_ids: List[int], enemy_ids: List[int], bans: List[int], role_id: int = 0):
+    available_champions: List[int] = []  # List of available champion IDs
+    def __init__(self, model_path: str, ally_ids: List[int], enemy_ids: List[int], bans: List[int], role_id: int, available_champions: List[int]):
+        
         self.ally_ids = ally_ids
         self.enemy_ids = enemy_ids
         self.bans = bans
         self.role_id = role_id
         self.model = saving.load_model(model_path)
         #filtter available champions based on current picks and bans
-        self.available_champions = [c for c in self.available_champions if c not in ally_ids and c not in enemy_ids and c not in bans]
+        self.available_champions = available_champions
         self.input_vector = self.generateBaseInput()
     def predict(self, input_data: list[list[float]]) -> list[list[float]]:
         input_array = np.array(input_data, dtype=np.float32)

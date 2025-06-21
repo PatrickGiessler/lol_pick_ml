@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.predictor import ChampionPredictor
+from train.dataReader import DataReader
 from train.trainer import ChampionTrainer
 from app.schemas import PredictParams, PredictRequest, PredictResponse, TrainResponse
 from train.fetcher import DataFetcher
@@ -10,8 +11,8 @@ router = APIRouter()
 
 @router.get("/train", response_model=TrainResponse)
 def train():
-    fetcher = DataFetcher("http://localhost:3001/api/training/generate")
-    x, y = fetcher.fetch_data()
+    dataReader = DataReader("data/training_data.jsonl")
+    x, y = dataReader.read_data()
     trainer = ChampionTrainer(input_dim=x.shape[1], output_dim=y.shape[1])
     trainer.train(x, y, epochs=10, batch_size=32)
     trainer.save("model/saved_model/test.keras")

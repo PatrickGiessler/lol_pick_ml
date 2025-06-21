@@ -4,6 +4,8 @@ import numpy as np
 from keras.models import Sequential
 
 from keras import models,saving
+
+from train.trainer import custom_loss
 class ChampionPredictor:
     champion_count = 170 # Total number of champions in League of Legends
     role_count = 5  # Number of roles (Top, Jungle, Mid, ADC, Support)
@@ -25,19 +27,11 @@ class ChampionPredictor:
         self.enemy_ids = enemy_ids
         self.bans = bans
         self.role_id = role_id
-        self.model = saving.load_model(model_path)
+        self.model = saving.load_model(model_path, custom_objects={"custom_loss": custom_loss})
         #filtter available champions based on current picks and bans
         self.available_champions = available_champions
         self.input_vector = self.generateBaseInput()
-    def predict(self, input_data: list[list[float]]) -> list[list[float]]:
-        input_array = np.array(input_data, dtype=np.float32)
-
-        if input_array.ndim == 1:
-            # Single sample, reshape to (1, 685)
-            input_array = np.expand_dims(input_array, axis=0)
-
-        predictions = self.model.predict(input_array)
-        return predictions.tolist()
+ 
     def reccommend(self, top_n: int = 5) -> list[Tuple[int, float]]:
         """
         Recommends top N champions given current pick phase.
@@ -50,7 +44,8 @@ class ChampionPredictor:
             input_vec = np.array(self.input_vector, dtype=np.float32).copy()
             input_vec[self.candidate_start_index + champ_id] = 1  # Simulate candidate
             prediction = self.model.predict(input_vec.reshape(1, -1), verbose=0)
-            scores.append((champ_id, float(prediction[0][0])))
+            score = self.calcscore(prediction)
+            scores.append((champ_id, score))
 
         # Sort by prediction score descending
         scores.sort(key=lambda x: x[1], reverse=True)
@@ -93,5 +88,31 @@ class ChampionPredictor:
         base_input[self.role_start_index + self.role_id] = 1
         return base_input.tolist()
         # Evaluate all available candidates
-       
-    
+    def calcscore(self, prediction) -> float:
+        # Unpack predicted values
+        prediction = prediction[0]  # Assuming prediction is a single-element array
+        # Extract individual metrics from the prediction
+        if len(prediction) != 8:
+            raise ValueError(f"Expected prediction length of 8, got {len(prediction)}")
+        win_prob = prediction[0]
+        winrate = prediction[1]
+        kda = prediction[2]
+        avg_dmg = prediction[3]
+        avg_dmg_taken = prediction[4]
+        shielded = prediction[5]
+        heals = prediction[6]
+        cc_time = prediction[7]
+
+        # Example scoring formula (tune as needed)
+        score = (
+            0.4 * win_prob +
+            0.2 * kda +
+            0.15 * winrate +
+            0.1 * avg_dmg -
+            0.1 * avg_dmg_taken +
+            0.05 * heals +
+            0.05 * cc_time
+        )
+        return score
+
+            

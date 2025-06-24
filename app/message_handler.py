@@ -1,3 +1,4 @@
+import re
 import pika
 import json
 import os
@@ -47,7 +48,12 @@ class RabbitMQHandler:
         )
         self.connection = pika.BlockingConnection(parameters)
         self.channel = self.connection.channel()
-        self.channel.queue_declare(queue=self.queue_name)
+        
+        # Declare the queue with durable=True for persistence
+        self.channel.queue_declare(queue=self.queue_name, durable=False)
+        
+        print(f"Connected to RabbitMQ at {self.host}:{self.port}")
+        print(f"Listening on queue: {self.queue_name}")
         
     def disconnect(self):
         """Close the connection to RabbitMQ server."""
@@ -64,29 +70,37 @@ class RabbitMQHandler:
             props: Properties
             body: Message body
         """
+        print(f"Message received! Body: {body}")
+        print(f"Properties: {props}")
+        print(f"Method: {method}")
+        
         try:
             # Parse the request
-            params = json.loads(body).data
-            print(f"Received: {params}")
+            params = json.loads(body)
+            data =params.get('data', {})
+            print(f"Parsed params: {params}")
             
             # Create predictor and get recommendations
             predictor = ChampionPredictor(
                 self.model_path,
-                ally_ids=params.get('ally_ids', []),
-                enemy_ids=params.get('enemy_ids', []),
-                bans=params.get('bans', []),
-                role_id=params.get('role_id', 0),
-                available_champions=params.get('available_champions', [])
+                ally_ids=data.get('allies', []),
+                enemy_ids=data.get('enemies', []),
+                bans=data.get('bans', []),
+                role_id=data.get('role', 0),
+                available_champions=data.get('available_champions', [])
             )
 
-            top_champs = predictor.reccommend(top_n=5)
+            top_champs = predictor.reccommend(top_n=data.get('top_n', 5))
             
             # Log the results
             for champ_id, score in top_champs:
                 print(f"Champion {champ_id} -> Score: {score:.4f}")
             
-            # Send response
-            response = json.dumps(top_champs)
+            # create a dictionary for the response
+            # response = {"predictions": top_champs}
+            response = json.dumps({"predictions": top_champs})
+            
+  
             ch.basic_publish(
                 exchange='',
                 routing_key=props.reply_to,
@@ -127,3 +141,38 @@ class RabbitMQHandler:
             print(" [!] Stopping consumer...")
             self.channel.stop_consuming()
             self.disconnect()
+    
+    def connect_with_pattern(self, pattern: str = 'predict.request'):
+        """
+        Alternative connection method for NestJS pattern-based routing.
+        
+        Args:
+            pattern: The message pattern to listen for
+        """
+        credentials = pika.PlainCredentials(self.username, self.password)
+        parameters = pika.ConnectionParameters(
+            host=self.host,
+            port=self.port,
+            virtual_host=self.vhost,
+            credentials=credentials
+        )
+        self.connection = pika.BlockingConnection(parameters)
+        self.channel = self.connection.channel()
+        
+        # For NestJS microservices, we might need to declare an exchange
+        exchange_name = ''  # Default exchange
+        self.channel.exchange_declare(exchange=exchange_name, exchange_type='direct')
+        
+        # Declare queue with the pattern as queue name
+        queue_result = self.channel.queue_declare(queue=pattern, durable=True)
+        queue_name = queue_result.method.queue
+        
+        # Bind the queue to the exchange with the pattern as routing key
+        self.channel.queue_bind(exchange=exchange_name, queue=queue_name, routing_key=pattern)
+        
+        # Store the actual queue name
+        self.queue_name = queue_name
+        
+        print(f"Connected to RabbitMQ at {self.host}:{self.port}")
+        print(f"Listening for pattern: {pattern}")
+        print(f"Queue: {queue_name}")

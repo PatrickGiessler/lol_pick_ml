@@ -2,6 +2,21 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Debug RabbitMQ Consumer",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "envFile": "${workspaceFolder}/.env",
+      "justMyCode": true,
+      "stopOnEntry": false
+    },
+    {
       "name": "Debug FastAPI with Uvicorn",
       "type": "debugpy",
       "request": "launch",
@@ -17,9 +32,56 @@
       "jinja": true,
       "justMyCode": true,
       "env": {
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONPATH": "${workspaceFolder}"
+      },
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Debug Training Script",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/train/trainer.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
         "PYTHONUNBUFFERED": "1"
       },
-      "console": "integratedTerminal"
+      "envFile": "${workspaceFolder}/.env",
+      "justMyCode": true,
+      "stopOnEntry": false
+    },
+    {
+      "name": "Debug Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "envFile": "${workspaceFolder}/.env",
+      "justMyCode": true,
+      "stopOnEntry": false
+    },
+    {
+      "name": "Debug Predictor Only",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/app/predictor.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "envFile": "${workspaceFolder}/.env",
+      "justMyCode": true,
+      "stopOnEntry": false
     }
   ]
 }

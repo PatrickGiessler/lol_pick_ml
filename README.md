@@ -5,6 +5,7 @@ A Python-based machine learning service for League of Legends match prediction a
 ## 📦 Overview
 
 The LOL Pick ML service offers:
+
 - Champion selection recommendations
 - Match outcome predictions
 - Statistical analysis and insights
@@ -43,6 +44,7 @@ lol_pick_ml/
 ### Installation
 
 #### Using pip
+
 ```bash
 # Create virtual environment
 python -m venv venv
@@ -56,6 +58,7 @@ pip install -r minio_requirements.txt
 ```
 
 #### Using conda
+
 ```bash
 # Create environment from requirements file
 conda create --name lol_ml --file requirements.txt
@@ -69,7 +72,7 @@ Create a `.env` file:
 ```env
 # FastAPI Configuration
 API_HOST=0.0.0.0
-API_PORT=8000
+API_PORT=8111
 
 # Model Configuration
 MODEL_PATH=./model/
@@ -97,15 +100,17 @@ DEBUG=False
 ### Running the Service
 
 #### Development Mode
+
 ```bash
 # Start the FastAPI server
 python main.py
 
 # Alternative: Start with uvicorn directly
-uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
+uvicorn app.api:app --host 0.0.0.0 --port 8111 --reload
 ```
 
 #### RabbitMQ Consumer Mode
+
 ```bash
 # Start message consumer
 python main.py --mode consumer
@@ -115,6 +120,7 @@ python main.py --pattern "predict.request"
 ```
 
 #### Production Mode
+
 ```bash
 # Start with production settings
 python main.py --mode production
@@ -128,18 +134,21 @@ docker-compose up --build
 ### Machine Learning Capabilities
 
 #### Champion Recommendation
+
 - Analyzes team compositions
 - Suggests optimal champion picks
 - Considers meta trends and win rates
 - Factors in player skill levels
 
 #### Match Prediction
+
 - Predicts match outcomes
 - Calculates win probabilities
 - Analyzes draft advantages
 - Provides confidence intervals
 
 #### Statistical Analysis
+
 - Champion performance metrics
 - Team synergy analysis
 - Item build optimization
@@ -148,6 +157,7 @@ docker-compose up --build
 ### API Endpoints
 
 #### Prediction Endpoints
+
 ```bash
 # Champion recommendation
 POST /api/v1/predict/champion
@@ -170,6 +180,7 @@ GET /api/v1/stats/matchup/{champion1}/{champion2}
 ```
 
 #### Model Management
+
 ```bash
 # Model information
 GET /api/v1/model/info
@@ -181,6 +192,7 @@ POST /api/v1/model/update
 ```
 
 #### Health and Status
+
 ```bash
 # Service health
 GET /health
@@ -225,16 +237,19 @@ The service processes messages from RabbitMQ:
 ### Model Types
 
 #### Champion Recommendation Model
+
 - **Algorithm**: Gradient Boosting (XGBoost)
 - **Features**: Team composition, enemy picks, meta trends
 - **Output**: Champion recommendations with confidence scores
 
 #### Match Prediction Model
+
 - **Algorithm**: Neural Network (TensorFlow/Keras)
 - **Features**: Champion stats, team synergy, historical data
 - **Output**: Win probability and confidence interval
 
 #### Statistical Models
+
 - **Algorithm**: Various (Linear Regression, Random Forest)
 - **Features**: Champion-specific metrics
 - **Output**: Performance predictions and insights
@@ -259,6 +274,7 @@ python train/update_models.py --incremental
 ### Model Deployment
 
 Models are stored in MinIO and can be:
+
 - Automatically loaded on service startup
 - Hot-swapped without service restart
 - Versioned for rollback capabilities
@@ -285,6 +301,7 @@ Models are stored in MinIO and can be:
 #### Dependencies
 
 **Core ML Stack:**
+
 - `fastapi`: API framework
 - `tensorflow`: Deep learning models
 - `scikit-learn`: Traditional ML algorithms
@@ -292,6 +309,7 @@ Models are stored in MinIO and can be:
 - `numpy`: Numerical computing
 
 **Infrastructure:**
+
 - `uvicorn`: ASGI server
 - `pika`: RabbitMQ client
 - `minio`: Object storage client
@@ -333,18 +351,21 @@ bandit -r app/
 ## 📊 Data Pipeline
 
 ### Data Sources
+
 - Riot Games API data
 - Match history and statistics
 - Champion metadata
 - Item and rune information
 
 ### Preprocessing
+
 - Data cleaning and validation
 - Feature engineering
 - Normalization and scaling
 - Train/validation/test splits
 
 ### Storage
+
 - MinIO for large datasets
 - Local cache for frequent access
 - Model artifacts and metadata
@@ -359,7 +380,7 @@ bandit -r app/
 docker build -t lol-pick-ml .
 
 # Run container
-docker run -p 8000:8000 lol-pick-ml
+docker run -p 8111:8111 lol-pick-ml
 ```
 
 ### Environment Variables for Docker
@@ -369,18 +390,18 @@ docker run -p 8000:8000 lol-pick-ml
 MINIO_ENDPOINT=minio:9000
 RABBITMQ_URL=amqp://rabbitmq:5672
 MODEL_PATH=/app/model/
-API_PORT=8000
+API_PORT=8111
 ```
 
 ### Docker Compose
 
 ```yaml
-version: '3.8'
+version: "3.8"
 services:
   lol-pick-ml:
     build: .
     ports:
-      - "8000:8000"
+      - "8111:8111"
     environment:
       - MINIO_ENDPOINT=minio:9000
       - RABBITMQ_URL=amqp://rabbitmq:5672
@@ -392,18 +413,21 @@ services:
 ## 📈 Monitoring and Metrics
 
 ### Performance Metrics
+
 - Prediction accuracy and precision
 - Model inference time
 - API response times
 - Resource utilization
 
 ### Model Metrics
+
 - Validation accuracy
 - Cross-validation scores
 - Feature importance
 - Prediction confidence distributions
 
 ### Logging
+
 - Structured logging with JSON format
 - Request/response logging
 - Error tracking and alerts
@@ -412,12 +436,14 @@ services:
 ## 🔒 Security
 
 ### API Security
+
 - Input validation with Pydantic
 - Rate limiting for API endpoints
 - Error handling without data leakage
 - Secure model loading and execution
 
 ### Data Protection
+
 - Encrypted communication channels
 - Secure storage of model artifacts
 - No personal data retention
@@ -461,6 +487,7 @@ services:
 ### Debug Mode
 
 Enable debug logging:
+
 ```env
 DEBUG=True
 LOG_LEVEL=DEBUG

@@ -5,7 +5,6 @@ from train.dataReader import DataReader
 from train.trainer import ChampionTrainer
 from app.schemas import PredictParams, PredictRequest, PredictResponse, TrainResponse
 from train.fetcher import DataFetcher
-import tensorflow as tf
 
 router = APIRouter()
 

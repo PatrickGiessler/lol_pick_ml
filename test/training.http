@@ -1,5 +1,5 @@
 @hostname = http://127.0.0.1
-@port = 8111
+@port = 8000
 @host = {{hostname}}:{{port}}
 @endpoint = /predict
 

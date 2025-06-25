@@ -5,23 +5,29 @@ FROM python:3.11-slim AS base
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_VENV_IN_PROJECT=1 \
+    POETRY_CACHE_DIR=/tmp/poetry_cache
 
-# Install system dependencies
+# Install system dependencies and Poetry
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
+    curl \
+    && pip install poetry \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements files
-COPY lol_pick_ml/requirements.txt lol_pick_ml/minio_requirements.txt ./
+# Copy Poetry configuration files
+COPY lol_pick_ml/pyproject.toml lol_pick_ml/poetry.lock* ./
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir -r minio_requirements.txt
+# Configure Poetry and install dependencies
+RUN poetry config virtualenvs.create false \
+    && poetry install --only=main \
+    && rm -rf $POETRY_CACHE_DIR
 
 # Production stage
 FROM python:3.11-slim AS production
@@ -52,7 +58,7 @@ EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
+    CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
 
 # Start the application
 CMD ["python", "main.py"]

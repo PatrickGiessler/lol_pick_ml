@@ -2,3 +2,4 @@
 model/saved_model/**
 .env
 data/**
+.conda/**

@@ -63,3 +63,10 @@ docker-compose*
 
 # Poetry
 poetry.lock
+
+# Large data files - exclude from build context
+data/**
+training_data.jsonl
+*.jsonl
+minio/
+model/

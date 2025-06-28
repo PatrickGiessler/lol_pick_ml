@@ -4,6 +4,18 @@ from app.api import router
 from dotenv import load_dotenv
 from app.message_handler import RabbitMQHandler
 import threading
+import logging
+import sys
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -35,47 +47,51 @@ def root():
 
 def start_rabbitmq_consumer():
     """Start RabbitMQ consumer in a separate thread"""
+    logger.info("Starting RabbitMQ consumer...")
     rabbitmq_handler = RabbitMQHandler()
     
     try:
         # Try connecting with the pattern-based method first
-        print("Attempting to connect with pattern-based routing...")
+        logger.info("Attempting to connect with pattern-based routing...")
         rabbitmq_handler.connect_with_pattern('predict.request')
         
         # Start consuming messages
+        logger.info("Starting to consume messages from RabbitMQ...")
         rabbitmq_handler.start_consuming()
         
     except Exception as e:
-        print(f"Pattern-based connection failed: {e}")
-        print("Falling back to regular connection...")
+        logger.error(f"Pattern-based connection failed: {e}")
+        logger.info("Falling back to regular connection...")
         try:
             # Fallback to regular connection
             rabbitmq_handler.connect()
             rabbitmq_handler.start_consuming()
         except Exception as e2:
-            print(f"Regular connection also failed: {e2}")
+            logger.error(f"Regular connection also failed: {e2}")
     finally:
         # Ensure proper cleanup
+        logger.info("Disconnecting from RabbitMQ...")
         rabbitmq_handler.disconnect()
 
 def main():
     """Main function to start FastAPI server (and optionally RabbitMQ consumer)."""
     
-    # Uncomment the following lines if you want to run RabbitMQ consumer alongside FastAPI
-    # consumer_thread = threading.Thread(target=start_rabbitmq_consumer, daemon=True)
-    # consumer_thread.start()
-    # print("RabbitMQ consumer started in background thread")
+    # Start RabbitMQ consumer alongside FastAPI
+    logger.info("Starting RabbitMQ consumer in background thread...")
+    consumer_thread = threading.Thread(target=start_rabbitmq_consumer, daemon=True)
+    consumer_thread.start()
+    logger.info("RabbitMQ consumer started in background thread")
     
     # Start FastAPI server
-    print("Starting FastAPI server...")
-    print("Training endpoint available at: http://localhost:8111/train")
-    print("Prediction endpoint available at: http://localhost:8111/predict")
-    print("API documentation available at: http://localhost:8111/docs")
+    logger.info("Starting FastAPI server...")
+    logger.info("Training endpoint available at: http://localhost:8000/train")
+    logger.info("Prediction endpoint available at: http://localhost:8000/predict")
+    logger.info("API documentation available at: http://localhost:8000/docs")
     
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8111,
+        port=8000,
         log_level="info"
     )
 

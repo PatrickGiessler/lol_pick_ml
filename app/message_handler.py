@@ -2,8 +2,12 @@ import re
 import pika
 import json
 import os
+import logging
 from typing import Callable, Any, Optional
 from app.predictor import ChampionPredictor
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 
 class RabbitMQHandler:
@@ -39,6 +43,7 @@ class RabbitMQHandler:
         
     def connect(self):
         """Establish connection to RabbitMQ server."""
+        logger.info(f"Connecting to RabbitMQ at {self.host}:{self.port}")
         credentials = pika.PlainCredentials(self.username, self.password)
         parameters = pika.ConnectionParameters(
             host=self.host,
@@ -46,8 +51,13 @@ class RabbitMQHandler:
             virtual_host=self.vhost,
             credentials=credentials
         )
-        self.connection = pika.BlockingConnection(parameters)
-        self.channel = self.connection.channel()
+        try:
+            self.connection = pika.BlockingConnection(parameters)
+            self.channel = self.connection.channel()
+            logger.info("Successfully connected to RabbitMQ")
+        except Exception as e:
+            logger.error(f"Failed to connect to RabbitMQ: {e}")
+            raise
         
         # Declare the queue with durable=True for persistence
         self.channel.queue_declare(queue=self.queue_name, durable=False)
@@ -70,15 +80,15 @@ class RabbitMQHandler:
             props: Properties
             body: Message body
         """
-        print(f"Message received! Body: {body}")
-        print(f"Properties: {props}")
-        print(f"Method: {method}")
+        logger.info(f"Message received! Body: {body}")
+        logger.debug(f"Properties: {props}")
+        logger.debug(f"Method: {method}")
         
         try:
             # Parse the request
             params = json.loads(body)
-            data =params.get('data', {})
-            print(f"Parsed params: {params}")
+            data = params.get('data', {})
+            logger.info(f"Parsed prediction request: {data}")
             
             # Create predictor and get recommendations
             predictor = ChampionPredictor(
@@ -93,14 +103,19 @@ class RabbitMQHandler:
             top_champs = predictor.reccommend(top_n=data.get('top_n', 5))
             
             # Log the results
+            logger.info(f"Prediction results for {data.get('role', 'unknown')} role:")
             for champ_id, score in top_champs:
-                print(f"Champion {champ_id} -> Score: {score:.4f}")
+                logger.info(f"Champion {champ_id} -> Score: {score:.4f}")
             
-            # create a dictionary for the response
-            # response = {"predictions": top_champs}
-            response = json.dumps({"predictions": top_champs})
+            # Convert NumPy float32 to regular Python float and format as array of arrays
+            predictions = []
+            for champ_id, score in top_champs:
+                predictions.append([int(champ_id), float(score)])  # [championId, score] format
             
-  
+            # Create response in the format expected by the middleware
+            response = json.dumps({"predictions": predictions})
+            logger.info(f"Sending response to {props.reply_to}: {response}")
+            
             ch.basic_publish(
                 exchange='',
                 routing_key=props.reply_to,
@@ -110,9 +125,10 @@ class RabbitMQHandler:
             
             # Acknowledge the message
             ch.basic_ack(delivery_tag=method.delivery_tag)
+            logger.info("Message processed successfully")
             
         except Exception as e:
-            print(f"Error processing request: {e}")
+            logger.error(f"Error processing request: {e}")
             # Send error response
             error_response = json.dumps({"error": str(e)})
             ch.basic_publish(
@@ -128,13 +144,14 @@ class RabbitMQHandler:
         if not self.channel:
             raise RuntimeError("Not connected to RabbitMQ. Call connect() first.")
             
+        logger.info(f"Setting up consumer for queue: {self.queue_name}")
         self.channel.basic_qos(prefetch_count=1)
         self.channel.basic_consume(
             queue=self.queue_name,
             on_message_callback=self.process_prediction_request
         )
         
-        print(" [x] Awaiting RPC prediction requests")
+        logger.info(" [x] Awaiting RPC prediction requests")
         try:
             self.channel.start_consuming()
         except KeyboardInterrupt:

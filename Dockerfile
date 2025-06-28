@@ -10,13 +10,8 @@ ENV PYTHONUNBUFFERED=1 \
     POETRY_VENV_IN_PROJECT=1 \
     POETRY_CACHE_DIR=/tmp/poetry_cache
 
-# Install system dependencies and Poetry
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    curl \
-    && pip install poetry \
-    && rm -rf /var/lib/apt/lists/*
+# Install system dependencies and Poetry using a simpler approach
+RUN pip install poetry
 
 # Set working directory
 WORKDIR /app
@@ -24,10 +19,19 @@ WORKDIR /app
 # Copy Poetry configuration files
 COPY lol_pick_ml/pyproject.toml lol_pick_ml/poetry.lock* ./
 
-# Configure Poetry and install dependencies
+# Configure Poetry with memory optimizations and install dependencies
 RUN poetry config virtualenvs.create false \
+    && poetry config installer.max-workers 1 \
+    && poetry config installer.parallel false \
+    && export PIP_DEFAULT_TIMEOUT=600 \
+    && export PIP_NO_BUILD_ISOLATION=1 \
+    && export MAKEFLAGS="-j1" \
     && poetry install --only=main \
-    && rm -rf $POETRY_CACHE_DIR
+    && rm -rf $POETRY_CACHE_DIR \
+    && pip cache purge \
+    && rm -rf /root/.cache/pip \
+    && find /usr/local/lib/python3.11/site-packages -name "*.pyc" -delete \
+    && find /usr/local/lib/python3.11/site-packages -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
 # Production stage
 FROM python:3.11-slim AS production
@@ -49,6 +53,9 @@ COPY --from=base /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY --chown=appuser:appgroup lol_pick_ml/ .
+
+# Create data directory structure (actual data should be mounted as volume)
+RUN mkdir -p data
 
 # Switch to non-root user
 USER appuser

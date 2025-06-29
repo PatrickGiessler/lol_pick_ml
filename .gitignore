@@ -3,3 +3,4 @@ model/saved_model/**
 .env
 data/**
 .conda/**
+.DS_Store

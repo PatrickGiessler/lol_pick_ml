@@ -3,21 +3,16 @@ from fastapi import FastAPI
 from app.api import router
 from dotenv import load_dotenv
 from app.message_handler import RabbitMQHandler
+from app.logging_config import setup_logging, get_logger
 import threading
-import logging
 import sys
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
-
+# Load environment variables
 load_dotenv()
+
+# Configure enhanced logging
+setup_logging()
+logger = get_logger(__name__)
 
 # Create FastAPI app
 app = FastAPI(

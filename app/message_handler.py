@@ -62,8 +62,8 @@ class RabbitMQHandler:
         # Declare the queue with durable=True for persistence
         self.channel.queue_declare(queue=self.queue_name, durable=False)
         
-        print(f"Connected to RabbitMQ at {self.host}:{self.port}")
-        print(f"Listening on queue: {self.queue_name}")
+        logger.info(f"Connected to RabbitMQ at {self.host}:{self.port}")
+        logger.info(f"Listening on queue: {self.queue_name}")
         
     def disconnect(self):
         """Close the connection to RabbitMQ server."""
@@ -80,17 +80,35 @@ class RabbitMQHandler:
             props: Properties
             body: Message body
         """
-        logger.info(f"Message received! Body: {body}")
-        logger.debug(f"Properties: {props}")
-        logger.debug(f"Method: {method}")
+        request_id = props.correlation_id or 'unknown'
+        logger.info(f"Received prediction request", extra={
+            'request_id': request_id,
+            'queue': self.queue_name,
+            'body_size': len(body) if body else 0,
+            'reply_to': props.reply_to
+        })
         
         try:
             # Parse the request
             params = json.loads(body)
             data = params.get('data', {})
-            logger.info(f"Parsed prediction request: {data}")
+            
+            logger.info(f"Processing prediction request", extra={
+                'request_id': request_id,
+                'allies_count': len(data.get('allies', [])),
+                'enemies_count': len(data.get('enemies', [])),
+                'bans_count': len(data.get('bans', [])),
+                'role': data.get('role', 'unknown'),
+                'top_n': data.get('top_n', 5),
+                'available_champions_count': len(data.get('available_champions', []))
+            })
             
             # Create predictor and get recommendations
+            logger.debug(f"Creating predictor instance", extra={
+                'request_id': request_id,
+                'model_path': self.model_path
+            })
+            
             predictor = ChampionPredictor(
                 self.model_path,
                 ally_ids=data.get('allies', []),
@@ -102,10 +120,25 @@ class RabbitMQHandler:
 
             top_champs = predictor.reccommend(top_n=data.get('top_n', 5))
             
-            # Log the results
-            logger.info(f"Prediction results for {data.get('role', 'unknown')} role:")
-            for champ_id, score in top_champs:
-                logger.info(f"Champion {champ_id} -> Score: {score:.4f}")
+            # Log the results with structured data
+            logger.info(f"Prediction completed successfully", extra={
+                'request_id': request_id,
+                'role': data.get('role', 'unknown'),
+                'predictions_count': len(top_champs),
+                'top_prediction': {
+                    'champion_id': int(top_champs[0][0]) if top_champs else None,
+                    'score': float(top_champs[0][1]) if top_champs else None
+                } if top_champs else None
+            })
+            
+            # Log individual predictions at debug level
+            for i, (champ_id, score) in enumerate(top_champs):
+                logger.debug(f"Prediction result", extra={
+                    'request_id': request_id,
+                    'rank': i + 1,
+                    'champion_id': int(champ_id),
+                    'score': float(score)
+                })
             
             # Convert NumPy float32 to regular Python float and format as array of arrays
             predictions = []
@@ -114,7 +147,13 @@ class RabbitMQHandler:
             
             # Create response in the format expected by the middleware
             response = json.dumps({"predictions": predictions})
-            logger.info(f"Sending response to {props.reply_to}: {response}")
+            
+            logger.info(f"Sending prediction response", extra={
+                'request_id': request_id,
+                'reply_to': props.reply_to,
+                'response_size': len(response),
+                'predictions_count': len(predictions)
+            })
             
             ch.basic_publish(
                 exchange='',
@@ -125,10 +164,19 @@ class RabbitMQHandler:
             
             # Acknowledge the message
             ch.basic_ack(delivery_tag=method.delivery_tag)
-            logger.info("Message processed successfully")
+            logger.info(f"Request processed successfully", extra={
+                'request_id': request_id,
+                'processing_completed': True
+            })
             
         except Exception as e:
-            logger.error(f"Error processing request: {e}")
+            logger.error(f"Error processing prediction request", extra={
+                'request_id': request_id,
+                'error_type': type(e).__name__,
+                'error_message': str(e),
+                'queue': self.queue_name
+            }, exc_info=True)
+            
             # Send error response
             error_response = json.dumps({"error": str(e)})
             ch.basic_publish(
@@ -138,26 +186,50 @@ class RabbitMQHandler:
                 body=error_response
             )
             ch.basic_ack(delivery_tag=method.delivery_tag)
+            
+            logger.warning(f"Error response sent", extra={
+                'request_id': request_id,
+                'error_response_sent': True
+            })
     
     def start_consuming(self):
         """Start consuming messages from the queue."""
         if not self.channel:
             raise RuntimeError("Not connected to RabbitMQ. Call connect() first.")
             
-        logger.info(f"Setting up consumer for queue: {self.queue_name}")
+        logger.info(f"Setting up consumer", extra={
+            'queue': self.queue_name,
+            'host': self.host,
+            'port': self.port,
+            'model_path': self.model_path
+        })
+        
         self.channel.basic_qos(prefetch_count=1)
         self.channel.basic_consume(
             queue=self.queue_name,
             on_message_callback=self.process_prediction_request
         )
         
-        logger.info(" [x] Awaiting RPC prediction requests")
+        logger.info("RPC prediction service ready", extra={
+            'queue': self.queue_name,
+            'status': 'awaiting_requests'
+        })
+        
         try:
             self.channel.start_consuming()
         except KeyboardInterrupt:
-            print(" [!] Stopping consumer...")
+            logger.info("Received shutdown signal", extra={
+                'reason': 'keyboard_interrupt',
+                'graceful_shutdown': True
+            })
             self.channel.stop_consuming()
             self.disconnect()
+        except Exception as e:
+            logger.error("Error in consumer loop", extra={
+                'error_type': type(e).__name__,
+                'error_message': str(e)
+            }, exc_info=True)
+            raise
     
     def connect_with_pattern(self, pattern: str = 'predict.request'):
         """
@@ -190,6 +262,6 @@ class RabbitMQHandler:
         # Store the actual queue name
         self.queue_name = queue_name
         
-        print(f"Connected to RabbitMQ at {self.host}:{self.port}")
-        print(f"Listening for pattern: {pattern}")
-        print(f"Queue: {queue_name}")
+        logger.info(f"Connected to RabbitMQ at {self.host}:{self.port}")
+        logger.info(f"Listening for pattern: {pattern}")
+        logger.info(f"Queue: {queue_name}")

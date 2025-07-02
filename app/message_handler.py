@@ -36,7 +36,7 @@ class RabbitMQHandler:
         self.username = username or os.getenv('RABBITMQ_DEFAULT_USER', 'guest')
         self.password = password or os.getenv('RABBITMQ_DEFAULT_PASS', 'guest')
         self.vhost = vhost or os.getenv('RMQ_VHOST', '/')
-        self.queue_name = queue_name or os.getenv('RMQ_QUEUE_NAME', 'prediction.rpc')
+        self.queue_name = queue_name or os.getenv('RMQ_QUEUE_NAME', 'prediction.request')
         self.model_path = model_path or os.getenv('MODEL_PATH', 'model/saved_model/test.keras')
         self.connection = None
         self.channel = None

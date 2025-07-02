@@ -26,7 +26,14 @@ app.include_router(router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """Health check endpoint"""
+    import time
+    return {
+        "status": "ok",
+        "timestamp": time.time(),
+        "service": "lol-pick-ml",
+        "version": "1.0.0"
+    }
 
 @app.get("/")
 def root():

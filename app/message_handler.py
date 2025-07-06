@@ -100,7 +100,8 @@ class RabbitMQHandler:
                 'bans_count': len(data.get('bans', [])),
                 'role': data.get('role', 'unknown'),
                 'top_n': data.get('top_n', 5),
-                'available_champions_count': len(data.get('available_champions', []))
+                'available_champions_count': len(data.get('available_champions', [])),
+                'multipliers': data.get('multipliers', None)
             })
             
             # Create predictor and get recommendations
@@ -118,7 +119,10 @@ class RabbitMQHandler:
                 available_champions=data.get('available_champions', [])
             )
 
-            top_champs = predictor.reccommend(top_n=data.get('top_n', 5))
+            top_champs = predictor.reccommend(
+                top_n=data.get('top_n', 5),
+                multipliers=data.get('multipliers', None)
+            )
             
             # Log the results with structured data
             logger.info(f"Prediction completed successfully", extra={

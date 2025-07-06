@@ -61,7 +61,8 @@ def predict(params: PredictParams):
         'enemy_ids_count': len(params.enemy_ids),
         'bans_count': len(params.bans),
         'role_id': params.role_id,
-        'available_champions_count': len(params.available_champions)
+        'available_champions_count': len(params.available_champions),
+        'multipliers': params.multipliers
     })
     
     try:
@@ -74,7 +75,7 @@ def predict(params: PredictParams):
             available_champions=params.available_champions
         )
 
-        top_champs = predictor.reccommend(top_n=5)
+        top_champs = predictor.reccommend(top_n=5, multipliers=params.multipliers)
         
         logger.info("HTTP API prediction completed", extra={
             'predictions_count': len(top_champs),
@@ -102,7 +103,8 @@ def predict(params: PredictParams):
                 'ally_ids': params.ally_ids,
                 'enemy_ids': params.enemy_ids,
                 'bans': params.bans,
-                'role_id': params.role_id
+                'role_id': params.role_id,
+                'multipliers': params.multipliers
             }
         }, exc_info=True)
         raise

@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Dict
 
 class PredictRequest(BaseModel):
     ally_ids: List[int]  # IDs of allied champions
@@ -7,6 +7,7 @@ class PredictRequest(BaseModel):
     enemy_ids: List[int]  # IDs of enemy champions
     bans: List[int]  # IDs of banned champions
     role_id: int  # Role index (0–4)
+    multipliers: Optional[Dict[str, float]] = None  # Score calculation multipliers from frontend
 
 class PredictResponse(BaseModel):
     predictions: list[Tuple[int, float]]  # Batch of predictions
@@ -20,3 +21,4 @@ class PredictParams(BaseModel):
     enemy_ids: List[int]  # IDs of enemy champions
     bans: List[int]  # IDs of banned champions
     role_id: int  # Role index (0–4)
+    multipliers: Optional[Dict[str, float]] = None  # Score calculation multipliers from frontend

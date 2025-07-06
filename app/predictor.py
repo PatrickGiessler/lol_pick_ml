@@ -1,5 +1,5 @@
 from operator import ge
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Dict
 import numpy as np
 import tensorflow as tf
 from keras.models import Sequential
@@ -26,6 +26,18 @@ class ChampionPredictor:
     role_id: int = 0  # Role index (0–4)
     input_vector= list[float] # Input vector for the model
     available_champions: List[int] = []  # List of available champion IDs
+    
+    # Default multipliers for score calculation
+    default_multipliers = {
+        'win_prob': 0.4,
+        'kda': 0.2,
+        'winrate': 0.15,
+        'avg_dmg': 0.1,
+        'avg_dmg_taken': -0.1,
+        'shielded': 0.0,
+        'heals': 0.05,
+        'cc_time': 0.05
+    }
     def __init__(self, model_path: str, ally_ids: List[int], enemy_ids: List[int], bans: List[int], role_id: int, available_champions: List[int]):
         logger.info("Initializing ChampionPredictor", extra={
             'model_path': model_path,
@@ -65,16 +77,21 @@ class ChampionPredictor:
             'available_champions_after_filter': len(self.available_champions)
         })
  
-    def reccommend(self, top_n: int = 5) -> list[Tuple[int, float]]:
+    def reccommend(self, top_n: int = 5, multipliers: Optional[Dict[str, float]] = None) -> list[Tuple[int, float]]:
         """
         Recommends top N champions given current pick phase.
         :param top_n: Number of champions to return
+        :param multipliers: Dictionary of multipliers for score calculation
         :return: List of tuples (champion_id, score)
         """
+        if multipliers is None:
+            multipliers = self.default_multipliers
+            
         logger.info(f"Starting champion recommendation", extra={
             'top_n': top_n,
             'available_champions_count': len(self.available_champions),
-            'role_id': self.role_id
+            'role_id': self.role_id,
+            'multipliers': multipliers
         })
         
         scores = []
@@ -83,7 +100,7 @@ class ChampionPredictor:
                 input_vec = np.array(self.input_vector, dtype=np.float32).copy()
                 input_vec[self.candidate_start_index + champ_id] = 1  # Simulate candidate
                 prediction = self.model.predict(input_vec.reshape(1, -1), verbose=0)
-                score = self.calcscore(prediction)
+                score = self.calcscore(prediction, multipliers)
                 scores.append((champ_id, score))
                 
                 if i < 5:  # Log first 5 predictions at debug level
@@ -141,7 +158,16 @@ class ChampionPredictor:
         base_input[self.role_start_index + self.role_id] = 1
         return base_input.tolist()
         # Evaluate all available candidates
-    def calcscore(self, prediction) -> float:
+    def calcscore(self, prediction, multipliers: Optional[Dict[str, float]] = None) -> float:
+        """
+        Calculate score based on prediction and multipliers.
+        :param prediction: Model prediction output
+        :param multipliers: Dictionary of multipliers for each metric
+        :return: Calculated score
+        """
+        if multipliers is None:
+            multipliers = self.default_multipliers
+            
         # Unpack predicted values
         prediction = prediction[0]  # Assuming prediction is a single-element array
         # Extract individual metrics from the prediction
@@ -156,16 +182,53 @@ class ChampionPredictor:
         heals = prediction[6]
         cc_time = prediction[7]
 
-        # Example scoring formula (tune as needed)
+        # Calculate score using provided multipliers
         score = (
-            0.4 * win_prob +
-            0.2 * kda +
-            0.15 * winrate +
-            0.1 * avg_dmg -
-            0.1 * avg_dmg_taken +
-            0.05 * heals +
-            0.05 * cc_time
+            multipliers.get('win_prob', 0.4) * win_prob +
+            multipliers.get('kda', 0.2) * kda +
+            multipliers.get('winrate', 0.15) * winrate +
+            multipliers.get('avg_dmg', 0.1) * avg_dmg +
+            multipliers.get('avg_dmg_taken', -0.1) * avg_dmg_taken +
+            multipliers.get('shielded', 0.0) * shielded +
+            multipliers.get('heals', 0.05) * heals +
+            multipliers.get('cc_time', 0.05) * cc_time
         )
         return score
+    
+    def update_multipliers(self, multipliers: Dict[str, float]) -> None:
+        """
+        Update the default multipliers for score calculation.
+        :param multipliers: Dictionary of multipliers to update
+        """
+        logger.info("Updating multipliers", extra={
+            'old_multipliers': self.default_multipliers,
+            'new_multipliers': multipliers
+        })
+        self.default_multipliers.update(multipliers)
+        
+    def get_multipliers(self) -> Dict[str, float]:
+        """
+        Get the current multipliers.
+        :return: Dictionary of current multipliers
+        """
+        return self.default_multipliers.copy()
+        
+    def reset_multipliers(self) -> None:
+        """
+        Reset multipliers to default values.
+        """
+        self.default_multipliers = {
+            'win_prob': 0.4,
+            'kda': 0.2,
+            'winrate': 0.15,
+            'avg_dmg': 0.1,
+            'avg_dmg_taken': -0.1,
+            'shielded': 0.0,
+            'heals': 0.05,
+            'cc_time': 0.05
+        }
+        logger.info("Multipliers reset to default values", extra={
+            'multipliers': self.default_multipliers
+        })
 
-            
+

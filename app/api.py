@@ -4,7 +4,7 @@ import logging
 from app.predictor import ChampionPredictor
 from train.dataReader import DataReader
 from train.trainer import ChampionTrainer
-from app.schemas import PredictParams, PredictRequest, PredictResponse, TrainResponse
+from app.schemas import PredictParams, PredictRequest, PredictResponse, TrainResponse, TrainRequest
 from train.fetcher import DataFetcher
 
 # Set up logging
@@ -12,9 +12,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-@router.get("/train", response_model=TrainResponse)
-def train():
-    logger.info("Starting model training process")
+@router.post("/train", response_model=TrainResponse)
+def train(request: TrainRequest):
+    logger.info("Starting model training process", extra={
+        'version': request.version,
+        'epochs': request.epochs,
+        'batch_size': request.batch_size,
+        'loss_function': request.loss_function
+    })
     
     try:
         logger.info("Loading training data from data/training_data.jsonl")
@@ -27,25 +32,44 @@ def train():
             'samples_count': len(x)
         })
         
-        trainer = ChampionTrainer(input_dim=x.shape[1], output_dim=y.shape[1])
+        trainer = ChampionTrainer(
+            input_dim=x.shape[1], 
+            output_dim=y.shape[1],
+            loss_function=request.loss_function or "weighted_loss"
+        )
+        
+        epochs = request.epochs or 10
+        batch_size = request.batch_size or 32
         
         logger.info("Starting model training", extra={
-            'epochs': 10,
-            'batch_size': 32,
+            'epochs': epochs,
+            'batch_size': batch_size,
             'input_dim': x.shape[1],
-            'output_dim': y.shape[1]
+            'output_dim': y.shape[1],
+            'loss_function': request.loss_function or "weighted_loss"
         })
         
-        trainer.train(x, y, epochs=10, batch_size=32)
-        trainer.save("model/saved_model/test.keras")
-        trainer.export("model/saved_model/test.tflite")
+        trainer.train(x, y, epochs=epochs, batch_size=batch_size)
+        
+        # Create versioned model paths
+        model_path = f"model/saved_model/{request.version}.keras"
+        tflite_path = f"model/saved_model/{request.version}.tflite"
+        
+        trainer.save(model_path)
+        trainer.export(tflite_path)
         
         logger.info("Model training completed successfully", extra={
-            'model_saved_path': "model/saved_model/test.keras",
-            'tflite_exported_path': "model/saved_model/test.tflite"
+            'version': request.version,
+            'model_saved_path': model_path,
+            'tflite_exported_path': tflite_path
         })
         
-        return TrainResponse(message="Training completed and model saved.")
+        return TrainResponse(
+            message=f"Training completed and model {request.version} saved.",
+            version=request.version,
+            model_path=model_path,
+            tflite_path=tflite_path
+        )
         
     except Exception as e:
         logger.error("Model training failed", extra={
@@ -56,18 +80,23 @@ def train():
 
 @router.post("/predict", response_model=PredictResponse)
 def predict(params: PredictParams):
+    model_version = params.version or "test"
+    model_path = f"model/saved_model/{model_version}.keras"
+    
     logger.info("Received prediction request via HTTP API", extra={
         'ally_ids_count': len(params.ally_ids),
         'enemy_ids_count': len(params.enemy_ids),
         'bans_count': len(params.bans),
         'role_id': params.role_id,
         'available_champions_count': len(params.available_champions),
-        'multipliers': params.multipliers
+        'multipliers': params.multipliers,
+        'model_version': model_version,
+        'model_path': model_path
     })
     
     try:
         predictor = ChampionPredictor(
-            "model/saved_model/test.keras", 
+            model_path, 
             ally_ids=params.ally_ids,
             enemy_ids=params.enemy_ids, 
             bans=params.bans, 
@@ -99,12 +128,15 @@ def predict(params: PredictParams):
         logger.error("HTTP API prediction failed", extra={
             'error_type': type(e).__name__,
             'error_message': str(e),
+            'model_version': model_version,
+            'model_path': model_path,
             'request_params': {
                 'ally_ids': params.ally_ids,
                 'enemy_ids': params.enemy_ids,
                 'bans': params.bans,
                 'role_id': params.role_id,
-                'multipliers': params.multipliers
+                'multipliers': params.multipliers,
+                'model_version': model_version
             }
         }, exc_info=True)
         raise

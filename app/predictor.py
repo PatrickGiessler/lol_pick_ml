@@ -5,9 +5,10 @@ import tensorflow as tf
 from keras.models import Sequential
 import logging
 
-from keras import models,saving
+from keras import models, saving
+from keras.models import Model
 
-from train.trainer import custom_loss
+from train.trainer import custom_loss, weighted_loss, adaptive_loss
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class ChampionPredictor:
     role_id: int = 0  # Role index (0–4)
     input_vector= list[float] # Input vector for the model
     available_champions: List[int] = []  # List of available champion IDs
+    model: Optional[Model] = None  # Keras model instance
     
     # Default multipliers for score calculation
     default_multipliers = {
@@ -53,20 +55,35 @@ class ChampionPredictor:
         self.bans = bans
         self.role_id = role_id
         
+        # Include all custom loss functions in custom_objects
+        custom_objects = {
+            "custom_loss": custom_loss,
+            "weighted_loss": weighted_loss,
+            "adaptive_loss": adaptive_loss
+        }
+        
         try:
             logger.debug(f"Loading model from {model_path}")
-            self.model = saving.load_model(model_path, custom_objects={"custom_loss": custom_loss})
-            logger.info("Model loaded successfully", extra={
-                'model_path': model_path,
-                'model_type': type(self.model).__name__
-            })
+            self.model = saving.load_model(model_path, custom_objects=custom_objects)
+            
+            if self.model is not None:
+                logger.info("Model loaded successfully", extra={
+                    'model_path': model_path,
+                    'model_type': type(self.model).__name__,
+                    'model_input_shape': getattr(self.model, 'input_shape', 'Unknown'),
+                    'model_output_shape': getattr(self.model, 'output_shape', 'Unknown')
+                })
+            else:
+                raise RuntimeError(f"Model loading returned None for path: {model_path}")
+                
         except Exception as e:
             logger.error("Failed to load model", extra={
                 'model_path': model_path,
                 'error_type': type(e).__name__,
-                'error_message': str(e)
+                'error_message': str(e),
+                'available_custom_objects': list(custom_objects.keys())
             }, exc_info=True)
-            raise
+            raise RuntimeError(f"Failed to load model from {model_path}: {str(e)}")
         
         #filter available champions based on current picks and bans
         self.available_champions = available_champions
@@ -95,6 +112,9 @@ class ChampionPredictor:
         })
         
         scores = []
+        if self.model is None:
+            raise RuntimeError("Model not loaded. Cannot make predictions.")
+            
         for i, champ_id in enumerate(self.available_champions):
             try:
                 input_vec = np.array(self.input_vector, dtype=np.float32).copy()

@@ -1,4 +1,5 @@
 import re
+from sys import version
 import pika
 import json
 import os
@@ -101,8 +102,13 @@ class RabbitMQHandler:
                 'role': data.get('role', 'unknown'),
                 'top_n': data.get('top_n', 5),
                 'available_champions_count': len(data.get('available_champions', [])),
-                'multipliers': data.get('multipliers', None)
+                'multipliers': data.get('multipliers', None),
+                'version': data.get('version', 'test')  
             })
+            version = data.get('version', 'test')
+                # Update model path based on version
+            self.model_path = f"model/saved_model/{version}.keras"
+
             
             # Create predictor and get recommendations
             logger.debug(f"Creating predictor instance", extra={

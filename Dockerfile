@@ -1,5 +1,5 @@
 # Use Python 3.11 slim as base image
-FROM python:3.11-slim AS base
+FROM python:3.11-slim
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -7,11 +7,15 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     POETRY_NO_INTERACTION=1 \
-    POETRY_VENV_IN_PROJECT=1 \
+    POETRY_VENV_IN_PROJECT=0 \
     POETRY_CACHE_DIR=/tmp/poetry_cache
 
-# Install system dependencies and Poetry using a simpler approach
+# Install system dependencies and Poetry
 RUN pip install poetry
+
+# Create app user
+RUN groupadd -g 1001 -r appgroup && \
+    useradd -r -u 1001 -g appgroup appuser
 
 # Set working directory
 WORKDIR /app
@@ -19,7 +23,7 @@ WORKDIR /app
 # Copy Poetry configuration files
 COPY lol_pick_ml/pyproject.toml lol_pick_ml/poetry.lock* ./
 
-# Configure Poetry with memory optimizations and install dependencies
+# Configure Poetry and install dependencies
 RUN poetry config virtualenvs.create false \
     && poetry config installer.max-workers 1 \
     && poetry config installer.parallel false \
@@ -33,29 +37,14 @@ RUN poetry config virtualenvs.create false \
     && find /usr/local/lib/python3.11/site-packages -name "*.pyc" -delete \
     && find /usr/local/lib/python3.11/site-packages -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
-# Production stage
-FROM python:3.11-slim AS production
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
-
-# Create app user
-RUN groupadd -g 1001 -r appgroup && \
-    useradd -r -u 1001 -g appgroup appuser
-
-# Set working directory
-WORKDIR /app
-
-# Copy Python dependencies from base stage
-COPY --from=base /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=base /usr/local/bin /usr/local/bin
-
 # Copy application code
 COPY --chown=appuser:appgroup lol_pick_ml/ .
 
 # Create data directory structure (actual data should be mounted as volume)
 RUN mkdir -p data
+
+# Verify that uvicorn is available (debugging step)
+RUN python -c "import uvicorn; print('uvicorn successfully imported')" || (echo "uvicorn import failed" && exit 1)
 
 # Switch to non-root user
 USER appuser

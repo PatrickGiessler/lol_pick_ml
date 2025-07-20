@@ -4,8 +4,10 @@ from app.api import router
 from dotenv import load_dotenv
 from app.message_handler import RabbitMQHandler
 from app.logging_config import setup_logging, get_logger
+from app.model_manager import model_manager
 import threading
 import sys
+import asyncio
 
 # Load environment variables
 load_dotenv()
@@ -24,25 +26,60 @@ app = FastAPI(
 # Include the API router with all endpoints (including /train and /predict)
 app.include_router(router)
 
+@app.on_event("startup")
+async def startup_event():
+    """Initialize models and connections on startup."""
+    logger.info("Starting up application...")
+    
+    # Preload commonly used models
+    try:
+        common_models = [
+            "model/saved_model/test.keras",
+            "model/saved_model/15.11.1.keras"
+        ]
+        logger.info("Preloading models...")
+        model_manager.preload_models(common_models)
+        logger.info("Model preloading completed")
+    except Exception as e:
+        logger.warning(f"Failed to preload some models: {e}")
+    
+    logger.info("Application startup completed")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown."""
+    logger.info("Shutting down application...")
+    
+    # Clear model cache
+    model_manager.clear_cache()
+    
+    logger.info("Application shutdown completed")
+
 @app.get("/health")
-def health():
-    """Health check endpoint"""
+async def health():
+    """Async health check endpoint"""
     import time
+    
+    # Get model cache stats
+    cached_models = model_manager.get_cached_models()
+    
     return {
         "status": "ok",
         "timestamp": time.time(),
         "service": "lol-pick-ml",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "cached_models": len(cached_models),
+        "model_info": cached_models
     }
 
 @app.get("/")
-def root():
-    """Root endpoint with API information"""
+async def root():
+    """Async root endpoint with API information"""
     return {
         "message": "LoL Pick ML API",
         "endpoints": {
             "health": "/health",
-            "train": "/train (GET)",
+            "train": "/train (POST)",
             "predict": "/predict (POST)"
         }
     }
@@ -93,7 +130,7 @@ def main():
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=8100,
         log_level="info"
     )
 

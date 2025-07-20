@@ -9,6 +9,8 @@ from keras import models, saving
 from keras.models import Model
 
 from train.trainer import custom_loss, weighted_loss, adaptive_loss
+from app.model_manager import model_manager
+from app.vector_pool import vector_pool
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -25,9 +27,10 @@ class ChampionPredictor:
     enemy_ids: List[int] = []  # List to store enemy champion IDs
     bans: List[int] = []  # List to store banned champion IDs
     role_id: int = 0  # Role index (0–4)
-    input_vector= list[float] # Input vector for the model
+    input_vector: List[float] = []  # Input vector for the model
     available_champions: List[int] = []  # List of available champion IDs
     model: Optional[Model] = None  # Keras model instance
+    model_path: str = ""  # Path to the model file
     
     # Default multipliers for score calculation
     default_multipliers = {
@@ -54,34 +57,25 @@ class ChampionPredictor:
         self.enemy_ids = enemy_ids
         self.bans = bans
         self.role_id = role_id
-        
-        # Include all custom loss functions in custom_objects
-        custom_objects = {
-            "custom_loss": custom_loss,
-            "weighted_loss": weighted_loss,
-            "adaptive_loss": adaptive_loss
-        }
+        self.model_path = model_path
         
         try:
-            logger.debug(f"Loading model from {model_path}")
-            self.model = saving.load_model(model_path, custom_objects=custom_objects)
+            # Use cached model from model manager
+            logger.debug(f"Loading model from cache: {model_path}")
+            self.model = model_manager.get_model(model_path)
             
-            if self.model is not None:
-                logger.info("Model loaded successfully", extra={
-                    'model_path': model_path,
-                    'model_type': type(self.model).__name__,
-                    'model_input_shape': getattr(self.model, 'input_shape', 'Unknown'),
-                    'model_output_shape': getattr(self.model, 'output_shape', 'Unknown')
-                })
-            else:
-                raise RuntimeError(f"Model loading returned None for path: {model_path}")
+            logger.info("Model loaded successfully from cache", extra={
+                'model_path': model_path,
+                'model_type': type(self.model).__name__,
+                'model_input_shape': getattr(self.model, 'input_shape', 'Unknown'),
+                'model_output_shape': getattr(self.model, 'output_shape', 'Unknown')
+            })
                 
         except Exception as e:
-            logger.error("Failed to load model", extra={
+            logger.error("Failed to load model from cache", extra={
                 'model_path': model_path,
                 'error_type': type(e).__name__,
-                'error_message': str(e),
-                'available_custom_objects': list(custom_objects.keys())
+                'error_message': str(e)
             }, exc_info=True)
             raise RuntimeError(f"Failed to load model from {model_path}: {str(e)}")
         
@@ -114,28 +108,39 @@ class ChampionPredictor:
         scores = []
         if self.model is None:
             raise RuntimeError("Model not loaded. Cannot make predictions.")
+        
+        # Get base input vector from pool
+        base_input = vector_pool.get_vector()
+        
+        try:
+            # Copy base input data to pooled vector
+            base_input[:len(self.input_vector)] = self.input_vector
             
-        for i, champ_id in enumerate(self.available_champions):
-            try:
-                input_vec = np.array(self.input_vector, dtype=np.float32).copy()
-                input_vec[self.candidate_start_index + champ_id] = 1  # Simulate candidate
-                prediction = self.model.predict(input_vec.reshape(1, -1), verbose=0)
-                score = self.calcscore(prediction, multipliers)
-                scores.append((champ_id, score))
-                
-                if i < 5:  # Log first 5 predictions at debug level
-                    logger.debug(f"Champion prediction", extra={
+            for i, champ_id in enumerate(self.available_champions):
+                try:
+                    # Use the pooled vector and modify it
+                    input_vec = base_input.copy()
+                    input_vec[self.candidate_start_index + champ_id] = 1  # Simulate candidate
+                    prediction = self.model.predict(input_vec.reshape(1, -1), verbose=0)
+                    score = self.calcscore(prediction, multipliers)
+                    scores.append((champ_id, score))
+                    
+                    if i < 5:  # Log first 5 predictions at debug level
+                        logger.debug(f"Champion prediction", extra={
+                            'champion_id': champ_id,
+                            'score': float(score),
+                            'prediction_index': i
+                        })
+                except Exception as e:
+                    logger.warning(f"Error predicting for champion {champ_id}", extra={
                         'champion_id': champ_id,
-                        'score': float(score),
-                        'prediction_index': i
+                        'error_type': type(e).__name__,
+                        'error_message': str(e)
                     })
-            except Exception as e:
-                logger.warning(f"Error predicting for champion {champ_id}", extra={
-                    'champion_id': champ_id,
-                    'error_type': type(e).__name__,
-                    'error_message': str(e)
-                })
-                continue
+                    continue
+        finally:
+            # Return vector to pool
+            vector_pool.return_vector(base_input)
 
         # Sort by prediction score descending
         scores.sort(key=lambda x: x[1], reverse=True)
@@ -154,17 +159,10 @@ class ChampionPredictor:
         
         input_vector[self.role_start_index + 0] = 1    # Top role 
         return input_vector.tolist()
-    def generateBaseInput( self,
-       ) -> list[float]:
+    def generateBaseInput(self) -> List[float]:
         """
-        Recommends top N champions given current pick phase.
-        :param ally_ids: Champion IDs for allied team
-        :param enemy_ids: Champion IDs for enemy team
-        :param bans: Banned champion IDs
-        :param role_id: Role index (0–4)
-        :param available_champions: List of available champion IDs
-        :param top_n: Number of champions to return
-        :return: List of tuples (champion_id, score)
+        Generate base input vector for the current game state.
+        :return: List of floats representing the base input vector
         """
         base_input = np.zeros(self.vector_length, dtype=np.float32)
 
@@ -177,7 +175,6 @@ class ChampionPredictor:
             base_input[self.bans_start_index + bid] = 1
         base_input[self.role_start_index + self.role_id] = 1
         return base_input.tolist()
-        # Evaluate all available candidates
     def calcscore(self, prediction, multipliers: Optional[Dict[str, float]] = None) -> float:
         """
         Calculate score based on prediction and multipliers.

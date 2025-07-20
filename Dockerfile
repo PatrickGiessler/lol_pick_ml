@@ -38,9 +38,7 @@ FROM python:3.11-slim AS production
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PATH="/usr/local/bin:$PATH" \
-    PYTHONPATH="/usr/local/lib/python3.11/site-packages"
+    PYTHONDONTWRITEBYTECODE=1
 
 # Create app user
 RUN groupadd -g 1001 -r appgroup && \
@@ -49,9 +47,14 @@ RUN groupadd -g 1001 -r appgroup && \
 # Set working directory
 WORKDIR /app
 
-# Copy Python dependencies from builder stage
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Copy the entire Python installation from builder stage
+COPY --from=builder /usr/local /usr/local
+
+# Update library cache and ensure proper permissions
+RUN ldconfig && \
+    find /usr/local -type f -exec chmod 644 {} \; && \
+    find /usr/local -type d -exec chmod 755 {} \; && \
+    find /usr/local/bin -type f -exec chmod 755 {} \;
 
 # Verify that uvicorn is available before copying application code
 RUN python -c "import uvicorn; print('uvicorn successfully imported')" || (echo "uvicorn import failed" && exit 1)

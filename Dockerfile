@@ -1,5 +1,5 @@
-# Use Python 3.11 slim as base image
-FROM python:3.11-slim
+# Build stage
+FROM python:3.11-slim AS builder
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -12,10 +12,6 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Install system dependencies and Poetry
 RUN pip install poetry
-
-# Create app user
-RUN groupadd -g 1001 -r appgroup && \
-    useradd -r -u 1001 -g appgroup appuser
 
 # Set working directory
 WORKDIR /app
@@ -37,14 +33,34 @@ RUN poetry config virtualenvs.create false \
     && find /usr/local/lib/python3.11/site-packages -name "*.pyc" -delete \
     && find /usr/local/lib/python3.11/site-packages -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
+# Production stage
+FROM python:3.11-slim AS production
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/usr/local/bin:$PATH" \
+    PYTHONPATH="/usr/local/lib/python3.11/site-packages"
+
+# Create app user
+RUN groupadd -g 1001 -r appgroup && \
+    useradd -r -u 1001 -g appgroup appuser
+
+# Set working directory
+WORKDIR /app
+
+# Copy Python dependencies from builder stage
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Verify that uvicorn is available before copying application code
+RUN python -c "import uvicorn; print('uvicorn successfully imported')" || (echo "uvicorn import failed" && exit 1)
+
 # Copy application code
 COPY --chown=appuser:appgroup lol_pick_ml/ .
 
 # Create data directory structure (actual data should be mounted as volume)
-RUN mkdir -p data
-
-# Verify that uvicorn is available (debugging step)
-RUN python -c "import uvicorn; print('uvicorn successfully imported')" || (echo "uvicorn import failed" && exit 1)
+RUN mkdir -p data && chown -R appuser:appgroup data
 
 # Switch to non-root user
 USER appuser

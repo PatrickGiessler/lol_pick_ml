@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     POETRY_NO_INTERACTION=1 \
-    POETRY_VENV_IN_PROJECT=0 \
+    POETRY_VENV_IN_PROJECT=1 \
     POETRY_CACHE_DIR=/tmp/poetry_cache
 
 # Install system dependencies and Poetry
@@ -19,8 +19,9 @@ WORKDIR /app
 # Copy Poetry configuration files
 COPY lol_pick_ml/pyproject.toml lol_pick_ml/poetry.lock* ./
 
-# Configure Poetry and install dependencies
-RUN poetry config virtualenvs.create false \
+# Create virtual environment and install dependencies
+RUN poetry config virtualenvs.create true \
+    && poetry config virtualenvs.in-project true \
     && poetry config installer.max-workers 1 \
     && poetry config installer.parallel false \
     && export PIP_DEFAULT_TIMEOUT=600 \
@@ -28,17 +29,17 @@ RUN poetry config virtualenvs.create false \
     && export MAKEFLAGS="-j1" \
     && poetry install --only=main \
     && rm -rf $POETRY_CACHE_DIR \
-    && pip cache purge \
-    && rm -rf /root/.cache/pip \
-    && find /usr/local/lib/python3.11/site-packages -name "*.pyc" -delete \
-    && find /usr/local/lib/python3.11/site-packages -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+    && find .venv -name "*.pyc" -delete \
+    && find .venv -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
 # Production stage
 FROM python:3.11-slim AS production
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/app/.venv/bin:$PATH" \
+    VIRTUAL_ENV="/app/.venv"
 
 # Create app user
 RUN groupadd -g 1001 -r appgroup && \
@@ -47,14 +48,8 @@ RUN groupadd -g 1001 -r appgroup && \
 # Set working directory
 WORKDIR /app
 
-# Copy the entire Python installation from builder stage
-COPY --from=builder /usr/local /usr/local
-
-# Update library cache and ensure proper permissions
-RUN ldconfig && \
-    find /usr/local -type f -exec chmod 644 {} \; && \
-    find /usr/local -type d -exec chmod 755 {} \; && \
-    find /usr/local/bin -type f -exec chmod 755 {} \;
+# Copy the virtual environment from builder stage
+COPY --from=builder /app/.venv /app/.venv
 
 # Verify that uvicorn is available before copying application code
 RUN python -c "import uvicorn; print('uvicorn successfully imported')" || (echo "uvicorn import failed" && exit 1)

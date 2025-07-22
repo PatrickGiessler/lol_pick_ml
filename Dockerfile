@@ -30,7 +30,13 @@ RUN poetry config virtualenvs.create false \
     && export PIP_DEFAULT_TIMEOUT=600 \
     && export PIP_NO_BUILD_ISOLATION=1 \
     && export MAKEFLAGS="-j1" \
-    && poetry install --only=main \
+    && echo "=== Starting Poetry Install ===" \
+    && poetry install --only=main --verbose \
+    && echo "=== Poetry Install Complete ===" \
+    && echo "=== Checking installed packages ===" \
+    && pip list | grep -E "(uvicorn|fastapi)" \
+    && echo "=== Testing uvicorn import ===" \
+    && python -c "import uvicorn; print('uvicorn import successful')" \
     && rm -rf $POETRY_CACHE_DIR \
     && pip cache purge \
     && rm -rf /root/.cache/pip \

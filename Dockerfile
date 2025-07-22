@@ -5,12 +5,9 @@ FROM python:3.11-slim AS builder
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    POETRY_NO_INTERACTION=1 \
-    POETRY_VENV_IN_PROJECT=1 \
-    POETRY_CACHE_DIR=/tmp/poetry_cache
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies and Poetry
+# Install system dependencies
 RUN pip install poetry
 
 # Set working directory
@@ -19,18 +16,9 @@ WORKDIR /app
 # Copy Poetry configuration files
 COPY lol_pick_ml/pyproject.toml lol_pick_ml/poetry.lock* ./
 
-# Create virtual environment and install dependencies
-RUN poetry config virtualenvs.create true \
-    && poetry config virtualenvs.in-project true \
-    && poetry config installer.max-workers 1 \
-    && poetry config installer.parallel false \
-    && export PIP_DEFAULT_TIMEOUT=600 \
-    && export PIP_NO_BUILD_ISOLATION=1 \
-    && export MAKEFLAGS="-j1" \
-    && poetry install --only=main \
-    && rm -rf $POETRY_CACHE_DIR \
-    && find .venv -name "*.pyc" -delete \
-    && find .venv -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+# Export dependencies to requirements.txt and install to a custom directory
+RUN poetry export -f requirements.txt --output requirements.txt --without-hashes && \
+    pip install --prefix=/install --no-warn-script-location -r requirements.txt
 
 # Production stage
 FROM python:3.11-slim AS production
@@ -38,8 +26,7 @@ FROM python:3.11-slim AS production
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PATH="/app/.venv/bin:$PATH" \
-    VIRTUAL_ENV="/app/.venv"
+    PYTHONPATH="/usr/local/lib/python3.11/site-packages"
 
 # Create app user
 RUN groupadd -g 1001 -r appgroup && \
@@ -48,8 +35,8 @@ RUN groupadd -g 1001 -r appgroup && \
 # Set working directory
 WORKDIR /app
 
-# Copy the virtual environment from builder stage
-COPY --from=builder /app/.venv /app/.venv
+# Copy the installed packages from builder stage
+COPY --from=builder /install /usr/local
 
 # Verify that uvicorn is available before copying application code
 RUN python -c "import uvicorn; print('uvicorn successfully imported')" || (echo "uvicorn import failed" && exit 1)

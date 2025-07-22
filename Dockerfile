@@ -1,32 +1,17 @@
-# Build stage
-FROM python:3.11-slim AS builder
+# Use Python 3.11 slim as base image
+FROM python:3.11-slim
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_VENV_IN_PROJECT=0 \
+    POETRY_CACHE_DIR=/tmp/poetry_cache
 
-# Install system dependencies
+# Install system dependencies and Poetry
 RUN pip install poetry
-
-# Set working directory
-WORKDIR /app
-
-# Copy Poetry configuration files
-COPY lol_pick_ml/pyproject.toml lol_pick_ml/poetry.lock* ./
-
-# Export dependencies to requirements.txt and install to a custom directory
-RUN poetry export -f requirements.txt --output requirements.txt --without-hashes && \
-    pip install --prefix=/install --no-warn-script-location -r requirements.txt
-
-# Production stage
-FROM python:3.11-slim AS production
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="/usr/local/lib/python3.11/site-packages"
 
 # Create app user
 RUN groupadd -g 1001 -r appgroup && \
@@ -35,11 +20,22 @@ RUN groupadd -g 1001 -r appgroup && \
 # Set working directory
 WORKDIR /app
 
-# Copy the installed packages from builder stage
-COPY --from=builder /install /usr/local
+# Copy Poetry configuration files
+COPY lol_pick_ml/pyproject.toml lol_pick_ml/poetry.lock* ./
 
-# Verify that uvicorn is available before copying application code
-RUN python -c "import uvicorn; print('uvicorn successfully imported')" || (echo "uvicorn import failed" && exit 1)
+# Configure Poetry and install dependencies
+RUN poetry config virtualenvs.create false \
+    && poetry config installer.max-workers 1 \
+    && poetry config installer.parallel false \
+    && export PIP_DEFAULT_TIMEOUT=600 \
+    && export PIP_NO_BUILD_ISOLATION=1 \
+    && export MAKEFLAGS="-j1" \
+    && poetry install --only=main \
+    && rm -rf $POETRY_CACHE_DIR \
+    && pip cache purge \
+    && rm -rf /root/.cache/pip \
+    && find /usr/local/lib/python3.11/site-packages -name "*.pyc" -delete \
+    && find /usr/local/lib/python3.11/site-packages -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
 # Copy application code
 COPY --chown=appuser:appgroup lol_pick_ml/ .

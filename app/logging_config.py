@@ -11,8 +11,8 @@ import os
 from typing import Dict, Any
 
 def setup_logging(
-    level: str = None,
-    format_string: str = None,
+    level: str = "",
+    format_string: str = "",
     include_timestamp: bool = True,
     include_module: bool = True
 ) -> None:
@@ -120,7 +120,7 @@ def log_performance(
 def log_model_info(
     logger: logging.Logger,
     model_path: str,
-    model_type: str = None,
+    model_type: str,
     **context: Any
 ) -> None:
     """
@@ -174,7 +174,7 @@ def log_prediction_result(
     logger: logging.Logger,
     request_id: str,
     predictions: list,
-    processing_time_ms: float = None,
+    processing_time_ms: float,
     **context: Any
 ) -> None:
     """

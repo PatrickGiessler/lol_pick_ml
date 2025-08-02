@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from minio import Minio
 from minio.error import S3Error
 import urllib3
+from PIL import Image
+import numpy as np
 
 
 @dataclass
@@ -285,28 +287,77 @@ class MinioClient:
         """
         return self.bucket_name
 
+    def get_image(self, object_name: str) -> np.ndarray:
+        """
+        Retrieve an image file from MinIO and return as numpy array
+        
+        Args:
+            object_name: The name/path of the image object to retrieve
+            
+        Returns:
+            The image as a numpy array
+        """
+        try:
+            response = self.client.get_object(self.bucket_name, object_name)
+            image_data = response.read()
+            response.close()
+            response.release_conn()
+            
+            # Convert bytes to PIL Image then to numpy array
+            image = Image.open(io.BytesIO(image_data))
+            return np.array(image)
+            
+        except Exception as error:
+            raise Exception(f"Failed to get image file: {error}")
+    
+    def list_images(self, folder: Optional[str] = None, image_extensions: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """
+        List all image files in a specific folder
+        
+        Args:
+            folder: Optional folder path to filter files
+            image_extensions: List of image extensions to filter by (default: ['.png', '.jpg', '.jpeg'])
+            
+        Returns:
+            List of objects containing image file information
+        """
+        if image_extensions is None:
+            image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff']
+            
+        try:
+            prefix = f"{folder}/" if folder else ""
+            objects_list = []
+            
+            objects = self.client.list_objects(self.bucket_name, prefix=prefix, recursive=True)
+            
+            for obj in objects:
+                if obj.object_name and any(obj.object_name.lower().endswith(ext) for ext in image_extensions):
+                    objects_list.append({
+                        'name': obj.object_name,
+                        'last_modified': obj.last_modified,
+                        'size': obj.size,
+                        'etag': obj.etag,
+                        'content_type': obj.content_type
+                    })
+            
+            return objects_list
+            
+        except Exception as error:
+            raise Exception(f"Failed to list image files: {error}")
 
-# Example usage
-if __name__ == "__main__":
-    # Initialize client
-    client = MinioClient()
-    client.initialize_sync()
-    
-    # Save JSON data
-    sample_data = {"message": "Hello, MinIO!", "timestamp": datetime.now().isoformat()}
-    options = JsonSaveOptions(file_name="test_file", folder="test_folder")
-    
-    object_name = client.save_json(sample_data, options)
-    print(f"Saved to: {object_name}")
-    
-    # Retrieve JSON data
-    retrieved_data = client.get_json(object_name)
-    print(f"Retrieved: {retrieved_data}")
-    
-    # List files
-    files = client.list_json_files("test_folder")
-    print(f"Files in folder: {files}")
-    
-    # Get latest file
-    latest = client.get_latest_json_file("test_folder")
-    print(f"Latest file: {latest}")
+    def image_exists(self, object_name: str) -> bool:
+        """
+        Check if an image file exists in MinIO
+        
+        Args:
+            object_name: The name/path of the image object to check
+            
+        Returns:
+            True if the file exists, False otherwise
+        """
+        try:
+            self.client.stat_object(self.bucket_name, object_name)
+            return True
+            
+        except S3Error:
+            return False

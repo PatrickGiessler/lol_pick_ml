@@ -1,0 +1,74 @@
+@hostname = http://localhost
+@port = 8100
+@host = {{hostname}}:{{port}}
+
+### LoL Champion Detection API Tests
+
+### Health check
+GET {{host}}/health HTTP/1.1
+
+### Base URL / API Info
+GET {{host}} HTTP/1.1
+
+### API Documentation
+GET {{host}}/docs HTTP/1.1
+
+### Get default detection zones
+GET {{host}}/detect/zones/default HTTP/1.1
+
+### Upload image for champion detection
+POST {{host}}/detect/champions/upload HTTP/1.1
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="file"; filename="test.png"
+Content-Type: image/png
+
+< ./test.png
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="version"
+
+15.11.1
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="confidence_threshold"
+
+0.75
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="filter_empty_slots"
+
+true
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="use_parallel"
+
+true
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+### Champion detection with base64 (JSON)
+POST {{host}}/detect/champions HTTP/1.1
+Content-Type: application/json
+
+{
+  "image_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  "version": "15.11.1",
+  "confidence_threshold": 0.65,
+  "filter_empty_slots": true,
+  "use_parallel": true,
+  "zones": [
+    {
+      "x": 0.0,
+      "y": 0.01,
+      "width": 0.16,
+      "height": 0.07,
+      "label": "Ban1",
+      "scale_factor": [0.25, 0.3, 0.35],
+      "shape": "rectangle",
+      "relative": true
+    }
+  ]
+}
+
+### Performance statistics
+GET {{host}}/performance/stats HTTP/1.1
+
+### Model cache information
+GET {{host}}/models/cache HTTP/1.1

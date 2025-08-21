@@ -11,7 +11,6 @@ import cv2
 from dotenv import load_dotenv
 
 from templatematching.template_image import Shape
-from templatematching.template_analyzer import TemplateAnalyzer
 load_dotenv()
 
 # Add the project root to the Python path
@@ -67,26 +66,6 @@ def create_relative_zones() -> list[Zone]:
         ),
     ]
 
-def analyze_templates(detector: ChampionDetector):
-    """Analyze template quality and provide recommendations"""
-    print("=== TEMPLATE ANALYSIS ===")
-    
-    analyzer = TemplateAnalyzer()
-    report = analyzer.create_template_report(detector.template_manager, detector.zones)
-    print(report)
-    
-    # Suggest better scale factors for each zone
-    print("\n=== SCALE FACTOR RECOMMENDATIONS ===")
-    for zone in detector.zones:
-        # Get a sample template to analyze
-        templates = detector.template_manager.get_templates_by_scale_and_shape(zone.scale_factor, zone.shape)
-        if templates:
-            sample_template = templates[0]
-            template_size = sample_template.template.shape  # Use .template instead of .template_grayscale
-            zone_size = (int(zone.height * 1080), int(zone.width * 1920)) if zone.relative else (int(zone.height), int(zone.width))
-            
-            suggested_scales = analyzer.suggest_scale_factors(template_size, zone_size)
-            print(f"{zone.label}: Current scales {zone.scale_factor} -> Suggested: {suggested_scales}")
 
 def main():
     """Main function to test champion detection with advanced features"""
@@ -114,12 +93,8 @@ def main():
         detector = ChampionDetector(
             version="15.11.1", 
             confidence_threshold=0.65,  # Lower threshold, rely on filtering
-            zones=zones,
-            filter_empty_slots=True  # Enable background filtering
-        )
-        
-        # Analyze template quality
-        analyze_templates(detector)
+            zones=zones        )
+
         
         # Load and analyze test image
         test_image = cv2.imread(test_image_path)

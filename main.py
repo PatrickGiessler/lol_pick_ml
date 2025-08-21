@@ -6,8 +6,7 @@ from app.message_handler import RabbitMQHandler
 from app.logging_config import setup_logging, get_logger
 from app.model_manager import model_manager
 import threading
-import sys
-import asyncio
+
 
 # Load environment variables
 load_dotenv()
@@ -19,7 +18,18 @@ logger = get_logger(__name__)
 # Create FastAPI app
 app = FastAPI(
     title="LoL Pick ML API",
-    description="API for League of Legends champion selection prediction and model training",
+    description="""
+    Comprehensive API for League of Legends champion analysis and prediction.
+    
+    Features:
+    - **ML-based Prediction**: Get champion recommendations based on game state
+    - **Image-based Detection**: Detect champions from screenshots using template matching
+    - **Model Training**: Train custom ML models with your data
+    - **RabbitMQ Integration**: Message queue support for scalable processing
+    - **Performance Monitoring**: Track API performance and metrics
+    
+    Supports both REST API and RabbitMQ message patterns for flexible integration.
+    """,
     version="1.0.0"
 )
 
@@ -77,10 +87,22 @@ async def root():
     """Async root endpoint with API information"""
     return {
         "message": "LoL Pick ML API",
+        "version": "1.0.0",
+        "features": {
+            "ml_predictions": "Champion recommendations based on game state",
+            "image_detection": "Champion detection from screenshots",
+            "model_training": "Custom ML model training",
+            "rabbitmq_support": "Message queue integration"
+        },
         "endpoints": {
             "health": "/health",
             "train": "/train (POST)",
-            "predict": "/predict (POST)"
+            "predict": "/predict (POST)",
+            "detect_champions": "/detect/champions (POST)",
+            "detect_upload": "/detect/champions/upload (POST)",
+            "default_zones": "/detect/zones/default (GET)",
+            "performance_stats": "/performance/stats (GET)",
+            "documentation": "/docs"
         }
     }
 
@@ -123,9 +145,10 @@ def main():
     
     # Start FastAPI server
     logger.info("Starting FastAPI server...")
-    logger.info("Training endpoint available at: http://localhost:8000/train")
-    logger.info("Prediction endpoint available at: http://localhost:8000/predict")
-    logger.info("API documentation available at: http://localhost:8000/docs")
+    logger.info("Training endpoint available at: http://localhost:8100/train")
+    logger.info("Prediction endpoint available at: http://localhost:8100/predict")
+    logger.info("Champion detection endpoint available at: http://localhost:8100/detect/champions")
+    logger.info("API documentation available at: http://localhost:8100/docs")
     
     uvicorn.run(
         app,

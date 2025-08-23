@@ -13,7 +13,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from app.logging_config import get_logger
 from pathlib import Path
 import MTM, cv2
@@ -24,7 +24,7 @@ from templatematching.template_image import Shape, TemplateImage, TemplateImageM
 logger = get_logger(__name__)
 
 
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator, model_validator
 from typing import List, Dict, Optional, Tuple, Any, Union
 
 class ZoneMultiplyer(Enum):
@@ -56,13 +56,32 @@ class Zone(BaseModel):
     relative: bool = False
     @field_validator('x', 'y', 'width', 'height')
     @classmethod
-    def validate_coordinates(cls, v, values):
-        relative = values.get('relative', False)
-        if relative and not (0.0 <= v <= 1.0):
-            raise ValueError(f"Relative coordinates must be between 0.0 and 1.0, got {v}")
-        elif not relative and v < 0:
+    def validate_coordinates(cls, v, info):
+        # In Pydantic v2, we need to check if we have access to other field values
+        # For now, we'll do basic validation and rely on model_validator for cross-field validation
+        if isinstance(v, float) and not (0.0 <= v <= 1.0):
+            # This could be relative coordinates, but we can't be sure without the relative field
+            pass  # We'll validate this in model_validator
+        elif isinstance(v, int) and v < 0:
             raise ValueError(f"Absolute coordinates must be >= 0, got {v}")
         return v
+    
+    @model_validator(mode='after')
+    def validate_coordinate_ranges(self):
+        """Validate coordinates based on whether they are relative or absolute."""
+        if self.relative:
+            # Relative coordinates should be between 0.0 and 1.0
+            for field_name in ['x', 'y', 'width', 'height']:
+                value = getattr(self, field_name)
+                if not (0.0 <= value <= 1.0):
+                    raise ValueError(f"Relative {field_name} must be between 0.0 and 1.0, got {value}")
+        else:
+            # Absolute coordinates should be >= 0
+            for field_name in ['x', 'y', 'width', 'height']:
+                value = getattr(self, field_name)
+                if value < 0:
+                    raise ValueError(f"Absolute {field_name} must be >= 0, got {value}")
+        return self
     
     def to_absolute(self, image_width: int, image_height: int) -> 'Zone':
         """Convert relative coordinates to absolute coordinates based on image dimensions"""

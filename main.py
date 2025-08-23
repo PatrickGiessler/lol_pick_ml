@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 from app.api import router
@@ -6,6 +7,8 @@ from app.message_handler import RabbitMQHandler
 from app.logging_config import setup_logging, get_logger
 from app.model_manager import model_manager
 import threading
+
+from templatematching.ocr_text_detector import OCRConfig, OCRLanguage
 
 
 # Load environment variables
@@ -35,9 +38,8 @@ app = FastAPI(
 
 # Include the API router with all endpoints (including /train and /predict)
 app.include_router(router)
-
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     """Initialize models and connections on startup."""
     logger.info("Starting up application...")
     
@@ -49,19 +51,32 @@ async def startup_event():
         ]
         logger.info("Preloading models...")
         model_manager.preload_models(common_models)
+        preload_configs = {
+            "high_accuracy": {
+                "config": OCRConfig(
+                    languages=[OCRLanguage.ENGLISH, OCRLanguage.GERMAN, OCRLanguage.SPANISH],
+                    min_confidence=0.9,
+                    target_text="",
+                    case_sensitive=True
+                ),
+                "gpu": True,
+                "verbose": False
+            }
+        }
+        model_manager.preload_ocr_detectors(preload_configs)
+
         logger.info("Model preloading completed")
     except Exception as e:
         logger.warning(f"Failed to preload some models: {e}")
     
     logger.info("Application startup completed")
-
-@app.on_event("shutdown")
-async def shutdown_event():
+    yield
     """Cleanup on shutdown."""
     logger.info("Shutting down application...")
     
     # Clear model cache
     model_manager.clear_cache()
+    model_manager.clear_ocr_cache()
     
     logger.info("Application shutdown completed")
 

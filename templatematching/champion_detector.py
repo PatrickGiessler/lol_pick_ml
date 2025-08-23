@@ -1,23 +1,20 @@
 from cProfile import label
 from cmath import rect
 from enum import Enum
+from turtle import done
 from xml.etree.ElementTree import PI
 from charset_normalizer import detect
 import cv2
 import numpy as np
-import base64
-import io
-from PIL import Image, ImageDraw
-from typing import List, Dict, Optional, Tuple, Any
-import os
-import json
+
+
+from typing import List, Optional, Tuple
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from app.logging_config import get_logger
-import sys
 from pathlib import Path
 import MTM, cv2
 
@@ -57,8 +54,8 @@ class Zone(BaseModel):
     shape: Shape = Shape.RECTANGLE  # Shape of the zone, default is rectangle
     # Whether coordinates are relative (0.0-1.0) or absolute pixels
     relative: bool = False
-    
-    @validator('x', 'y', 'width', 'height')
+    @field_validator('x', 'y', 'width', 'height')
+    @classmethod
     def validate_coordinates(cls, v, values):
         relative = values.get('relative', False)
         if relative and not (0.0 <= v <= 1.0):
@@ -82,6 +79,51 @@ class Zone(BaseModel):
             scale_factor=self.scale_factor,
             shape=self.shape
         )
+    @staticmethod
+    def get_default_zones() -> List['Zone']:
+      return  [
+        Zone(
+            x=ZoneMultiplyer.BAN1_X.value,
+            y=ZoneMultiplyer.BAN_Y.value,
+            width=ZoneMultiplyer.BAN_WIDTH.value,
+            height=ZoneMultiplyer.BAN_HEIGHT.value,
+            label="Ban1",
+            scale_factor=[0.25, 0.3, 0.35],
+            shape=Shape.RECTANGLE,
+            relative=True
+        ),
+        Zone(
+            x=ZoneMultiplyer.BAN2_X.value,
+            y=ZoneMultiplyer.BAN_Y.value, 
+            width=ZoneMultiplyer.BAN_WIDTH.value,
+            height=ZoneMultiplyer.BAN_HEIGHT.value,
+            label="Ban2",
+            scale_factor=[0.25, 0.3, 0.35],
+            shape=Shape.RECTANGLE,
+            relative=True
+        ),
+        Zone(
+            x=ZoneMultiplyer.PICK1_X.value,
+            y=ZoneMultiplyer.PICK_Y.value,
+            width=ZoneMultiplyer.PICK_WIDTH.value,
+            height=ZoneMultiplyer.PICK_HEIGHT.value,
+            label="Pick1",
+            scale_factor=[0.6, 0.7, 0.8, 0.9],
+            shape=Shape.ROUND,
+            relative=True
+        ),
+        Zone(
+            x=ZoneMultiplyer.PICK2_X.value,
+            y=ZoneMultiplyer.PICK_Y.value,
+            width=ZoneMultiplyer.PICK_WIDTH.value,
+            height=ZoneMultiplyer.PICK_HEIGHT.value,
+            label="Pick2",
+            scale_factor=[0.6, 0.7, 0.8, 0.9],
+            shape=Shape.ROUND,
+            relative=True
+        ),
+    ]
+
 
 class ChampionDetector:
     """

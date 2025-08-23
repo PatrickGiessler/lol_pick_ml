@@ -306,50 +306,6 @@ async def get_performance_stats():
 
 # ==================== CHAMPION DETECTION ENDPOINTS ====================
 
-def create_default_zones() -> List[Zone]:
-    """Create default zones for champion detection"""
-    return [
-        Zone(
-            x=ZoneMultiplyer.BAN1_X.value,
-            y=ZoneMultiplyer.BAN_Y.value,
-            width=ZoneMultiplyer.BAN_WIDTH.value,
-            height=ZoneMultiplyer.BAN_HEIGHT.value,
-            label="Ban1",
-            scale_factor=[0.25, 0.3, 0.35],
-            shape=Shape.RECTANGLE,
-            relative=True
-        ),
-        Zone(
-            x=ZoneMultiplyer.BAN2_X.value,
-            y=ZoneMultiplyer.BAN_Y.value, 
-            width=ZoneMultiplyer.BAN_WIDTH.value,
-            height=ZoneMultiplyer.BAN_HEIGHT.value,
-            label="Ban2",
-            scale_factor=[0.25, 0.3, 0.35],
-            shape=Shape.RECTANGLE,
-            relative=True
-        ),
-        Zone(
-            x=ZoneMultiplyer.PICK1_X.value,
-            y=ZoneMultiplyer.PICK_Y.value,
-            width=ZoneMultiplyer.PICK_WIDTH.value,
-            height=ZoneMultiplyer.PICK_HEIGHT.value,
-            label="Pick1",
-            scale_factor=[0.6, 0.7, 0.8, 0.9],
-            shape=Shape.ROUND,
-            relative=True
-        ),
-        Zone(
-            x=ZoneMultiplyer.PICK2_X.value,
-            y=ZoneMultiplyer.PICK_Y.value,
-            width=ZoneMultiplyer.PICK_WIDTH.value,
-            height=ZoneMultiplyer.PICK_HEIGHT.value,
-            label="Pick2",
-            scale_factor=[0.6, 0.7, 0.8, 0.9],
-            shape=Shape.ROUND,
-            relative=True
-        ),
-    ]
 
 def detection_zone_to_zone(dz: DetectionZone) -> Zone:
     """Convert API DetectionZone to internal Zone"""
@@ -421,7 +377,7 @@ def _detect_champions(request: DetectionRequest) -> DetectionResponse:
         if request.zones:
             zones = [detection_zone_to_zone(dz) for dz in request.zones]
         else:
-            zones = create_default_zones()
+            zones = Zone.get_default_zones()
         
         # Initialize detector
         detector = ChampionDetector(
@@ -560,7 +516,7 @@ async def get_default_zones():
     Get the default zone configuration for champion detection.
     """
     try:
-        zones = create_default_zones()
+        zones = Zone.get_default_zones()
         return {
             "zones": [
                 {

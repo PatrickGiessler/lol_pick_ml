@@ -1,7 +1,6 @@
 from cProfile import label
 from cmath import rect
 from enum import Enum
-from turtle import done
 from xml.etree.ElementTree import PI
 from charset_normalizer import detect
 import cv2

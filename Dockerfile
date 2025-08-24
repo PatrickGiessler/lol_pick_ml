@@ -10,7 +10,19 @@ ENV PYTHONUNBUFFERED=1 \
     POETRY_VENV_IN_PROJECT=0 \
     POETRY_CACHE_DIR=/tmp/poetry_cache
 
-# Install system dependencies and Poetry
+# Install system dependencies for OpenCV and other libraries
+RUN apt-get update && apt-get install -y \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libglib2.0-0 \
+    libgtk-3-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Poetry
 RUN pip install poetry
 
 # Create app user

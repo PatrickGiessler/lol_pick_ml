@@ -1,3 +1,4 @@
+from ast import mod
 from fastapi import APIRouter, BackgroundTasks, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 import logging
@@ -12,9 +13,23 @@ from io import BytesIO
 from PIL import Image
 
 from app.predictor import ChampionPredictor
+from templatematching import ocr_text_detector
+from templatematching.ocr_text_detector import OCRConfig, OCRLanguage
+from templatematching.enhanced_ocr_detector import EnhancedOCRTextDetector
+from templatematching.detection_pipeline import LeagueDetectionPipeline
 from train.dataReader import DataReader
 from train.trainer import ChampionTrainer
-from app.schemas import PredictParams, PredictRequest, PredictResponse, TrainResponse, TrainRequest, DetectionRequest, DetectionResponse, DetectionHit, DetectionZone
+from app.schemas import (
+    PredictParams,
+    PredictRequest,
+    PredictResponse,
+    TrainResponse,
+    TrainRequest,
+    DetectionRequest,
+    DetectionResponse,
+    DetectionHit,
+    DetectionZone,
+)
 from train.fetcher import DataFetcher
 from app.model_manager import model_manager
 from app.vector_pool import vector_pool
@@ -28,209 +43,283 @@ logger = logging.getLogger(__name__)
 # Thread pool for CPU-intensive operations
 executor = ThreadPoolExecutor(max_workers=4)
 
+# Global detection pipeline instance
+detection_pipeline = None
+
 router = APIRouter()
+
 
 # Preload commonly used models at startup
 def preload_models():
     """Preload commonly used models to improve response times."""
-    common_models = [
-        "model/saved_model/test.keras",
-        "model/saved_model/15.11.1.keras"
-    ]
+    global detection_pipeline
+    
+    common_models = ["model/saved_model/test.keras", "model/saved_model/15.11.1.keras"]
     model_manager.preload_models(common_models)
+    config = OCRConfig(
+        languages=[OCRLanguage.ENGLISH, OCRLanguage.GERMAN, OCRLanguage.SPANISH],
+        min_confidence=0.7,
+        target_text="pick your champion",
+        case_sensitive=False,
+    )
+    model_manager.preload_ocr_detectors(
+        {
+            "champion_selection": {"gpu": True, "verbose": False},
+            "general": {"config": config, "gpu": False},
+        }
+    )
+    
+    # Initialize the detection pipeline
+    try:
+        # Create enhanced OCR detector with LoL optimized settings
+        ocr_detector = EnhancedOCRTextDetector(config=config, gpu=True, verbose=False)
+        ocr_detector.apply_preset("lol_optimized")
+        
+        # Champion detector factory function
+        def champion_detector_factory(version="15.11.1", confidence_threshold=0.8, zones=None):
+            if zones is None:
+                zones = Zone.get_default_zones()
+            return ChampionDetector(
+                version=version,
+                confidence_threshold=confidence_threshold,
+                zones=zones
+            )
+        
+        # Initialize the detection pipeline
+        detection_pipeline = LeagueDetectionPipeline(ocr_detector, champion_detector_factory)
+        
+        logger.info("Detection pipeline initialized successfully")
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize detection pipeline: {e}")
+        detection_pipeline = None
+
 
 # Call preload when module is imported
 preload_models()
 
+
 @router.post("/train", response_model=TrainResponse)
 async def train(request: TrainRequest, background_tasks: BackgroundTasks):
     """Async training endpoint with background task support."""
-    logger.info("Starting model training process", extra={
-        'version': request.version,
-        'epochs': request.epochs,
-        'batch_size': request.batch_size,
-        'loss_function': request.loss_function
-    })
-    
+    logger.info(
+        "Starting model training process",
+        extra={
+            "version": request.version,
+            "epochs": request.epochs,
+            "batch_size": request.batch_size,
+            "loss_function": request.loss_function,
+        },
+    )
+
     try:
         # Run training in thread pool to avoid blocking
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(executor, _train_model, request)
-        
+
         # Add background task to preload the new model
         background_tasks.add_task(
-            model_manager.get_model, 
-            f"model/saved_model/{request.version}.keras"
+            model_manager.get_model, f"model/saved_model/{request.version}.keras"
         )
-        
+
         return result
-        
+
     except Exception as e:
-        logger.error("Model training failed", extra={
-            'error_type': type(e).__name__,
-            'error_message': str(e)
-        }, exc_info=True)
+        logger.error(
+            "Model training failed",
+            extra={"error_type": type(e).__name__, "error_message": str(e)},
+            exc_info=True,
+        )
         raise
+
 
 def _train_model(request: TrainRequest) -> TrainResponse:
     """Internal training function to run in thread pool."""
     import time
-    
+
     start_time = time.time()
-    
+
     try:
         logger.info("Loading training data from data/training_data.jsonl")
         dataReader = DataReader("data/training_data.jsonl")
         x, y = dataReader.read_data()
-        
-        logger.info("Training data loaded successfully", extra={
-            'input_shape': x.shape,
-            'output_shape': y.shape,
-            'samples_count': len(x)
-        })
-        
-        trainer = ChampionTrainer(
-            input_dim=x.shape[1], 
-            output_dim=y.shape[1],
-            loss_function=request.loss_function or "weighted_loss"
+
+        logger.info(
+            "Training data loaded successfully",
+            extra={
+                "input_shape": x.shape,
+                "output_shape": y.shape,
+                "samples_count": len(x),
+            },
         )
-        
+
+        trainer = ChampionTrainer(
+            input_dim=x.shape[1],
+            output_dim=y.shape[1],
+            loss_function=request.loss_function or "weighted_loss",
+        )
+
         epochs = request.epochs or 10
         batch_size = request.batch_size or 32
-        
-        logger.info("Starting model training", extra={
-            'epochs': epochs,
-            'batch_size': batch_size,
-            'input_dim': x.shape[1],
-            'output_dim': y.shape[1],
-            'loss_function': request.loss_function or "weighted_loss"
-        })
-        
+
+        logger.info(
+            "Starting model training",
+            extra={
+                "epochs": epochs,
+                "batch_size": batch_size,
+                "input_dim": x.shape[1],
+                "output_dim": y.shape[1],
+                "loss_function": request.loss_function or "weighted_loss",
+            },
+        )
+
         trainer.train(x, y, epochs=epochs, batch_size=batch_size)
-        
+
         # Create versioned model paths
         model_path = f"model/saved_model/{request.version}.keras"
         tflite_path = f"model/saved_model/{request.version}.tflite"
-        
+
         trainer.save(model_path)
         trainer.export(tflite_path)
-        
+
         # Record performance metrics
         training_time = (time.time() - start_time) * 1000  # Convert to ms
         performance_monitor.record_training_time(training_time)
-        
-        logger.info("Model training completed successfully", extra={
-            'version': request.version,
-            'model_saved_path': model_path,
-            'tflite_exported_path': tflite_path,
-            'training_time_ms': training_time
-        })
-        
+
+        logger.info(
+            "Model training completed successfully",
+            extra={
+                "version": request.version,
+                "model_saved_path": model_path,
+                "tflite_exported_path": tflite_path,
+                "training_time_ms": training_time,
+            },
+        )
+
         return TrainResponse(
             message=f"Training completed and model {request.version} saved.",
             version=request.version,
             model_path=model_path,
-            tflite_path=tflite_path
+            tflite_path=tflite_path,
         )
-    
+
     except Exception as e:
         training_time = (time.time() - start_time) * 1000
-        logger.error(f"Training failed after {training_time:.2f}ms", extra={
-            'error_type': type(e).__name__,
-            'error_message': str(e)
-        })
+        logger.error(
+            f"Training failed after {training_time:.2f}ms",
+            extra={"error_type": type(e).__name__, "error_message": str(e)},
+        )
         raise
+
 
 @router.post("/predict", response_model=PredictResponse)
 async def predict(params: PredictParams):
     """Async prediction endpoint with optimized model caching."""
     model_version = params.version or "test"
     model_path = f"model/saved_model/{model_version}.keras"
-    
-    logger.info("Received prediction request via HTTP API", extra={
-        'ally_ids_count': len(params.ally_ids),
-        'enemy_ids_count': len(params.enemy_ids),
-        'bans_count': len(params.bans),
-        'role_id': params.role_id,
-        'available_champions_count': len(params.available_champions),
-        'multipliers': params.multipliers,
-        'model_version': model_version,
-        'model_path': model_path
-    })
-    
+
+    logger.info(
+        "Received prediction request via HTTP API",
+        extra={
+            "ally_ids_count": len(params.ally_ids),
+            "enemy_ids_count": len(params.enemy_ids),
+            "bans_count": len(params.bans),
+            "role_id": params.role_id,
+            "available_champions_count": len(params.available_champions),
+            "multipliers": params.multipliers,
+            "model_version": model_version,
+            "model_path": model_path,
+        },
+    )
+
     try:
         # Run prediction in thread pool to avoid blocking event loop
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(executor, _predict_champions, params, model_path)
-        
-        logger.info("HTTP API prediction completed", extra={
-            'predictions_count': len(result),
-            'top_prediction': {
-                'champion_id': int(result[0][0]),
-                'score': float(result[0][1])
-            } if result else None
-        })
-        
+        result = await loop.run_in_executor(
+            executor, _predict_champions, params, model_path
+        )
+
+        logger.info(
+            "HTTP API prediction completed",
+            extra={
+                "predictions_count": len(result),
+                "top_prediction": (
+                    {"champion_id": int(result[0][0]), "score": float(result[0][1])}
+                    if result
+                    else None
+                ),
+            },
+        )
+
         return PredictResponse(predictions=result)
-        
+
     except Exception as e:
-        logger.error("HTTP API prediction failed", extra={
-            'error_type': type(e).__name__,
-            'error_message': str(e),
-            'model_version': model_version,
-            'model_path': model_path,
-            'request_params': {
-                'ally_ids': params.ally_ids,
-                'enemy_ids': params.enemy_ids,
-                'bans': params.bans,
-                'role_id': params.role_id,
-                'multipliers': params.multipliers,
-                'model_version': model_version
-            }
-        }, exc_info=True)
+        logger.error(
+            "HTTP API prediction failed",
+            extra={
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "model_version": model_version,
+                "model_path": model_path,
+                "request_params": {
+                    "ally_ids": params.ally_ids,
+                    "enemy_ids": params.enemy_ids,
+                    "bans": params.bans,
+                    "role_id": params.role_id,
+                    "multipliers": params.multipliers,
+                    "model_version": model_version,
+                },
+            },
+            exc_info=True,
+        )
         raise
+
 
 def _predict_champions(params: PredictParams, model_path: str) -> list:
     """Internal prediction function to run in thread pool."""
     import time
-    
+
     start_time = time.time()
-    
+
     try:
         predictor = ChampionPredictor(
-            model_path, 
+            model_path,
             ally_ids=params.ally_ids,
-            enemy_ids=params.enemy_ids, 
-            bans=params.bans, 
+            enemy_ids=params.enemy_ids,
+            bans=params.bans,
             role_id=params.role_id,
-            available_champions=params.available_champions
+            available_champions=params.available_champions,
         )
 
         top_champs = predictor.reccommend(top_n=5, multipliers=params.multipliers)
-        
+
         # Record performance metrics
         prediction_time = (time.time() - start_time) * 1000  # Convert to ms
         performance_monitor.record_prediction_time(prediction_time)
         performance_monitor.increment_request_count()
-        
+
         # Log predictions at debug level
         for i, (champ_id, score) in enumerate(top_champs):
-            logger.debug("HTTP API prediction result", extra={
-                'rank': i + 1,
-                'champion_id': int(champ_id),
-                'score': float(score)
-            })
-        
+            logger.debug(
+                "HTTP API prediction result",
+                extra={
+                    "rank": i + 1,
+                    "champion_id": int(champ_id),
+                    "score": float(score),
+                },
+            )
+
         logger.debug(f"Prediction completed in {prediction_time:.2f}ms")
         return top_champs
-    
+
     except Exception as e:
         prediction_time = (time.time() - start_time) * 1000
-        logger.error(f"Prediction failed after {prediction_time:.2f}ms", extra={
-            'error_type': type(e).__name__,
-            'error_message': str(e)
-        })
+        logger.error(
+            f"Prediction failed after {prediction_time:.2f}ms",
+            extra={"error_type": type(e).__name__, "error_message": str(e)},
+        )
         raise
+
 
 @router.get("/models/cache")
 async def get_model_cache_info():
@@ -240,14 +329,16 @@ async def get_model_cache_info():
         return {
             "cached_models_count": len(cached_models),
             "cached_models": cached_models,
-            "status": "ok"
+            "status": "ok",
         }
     except Exception as e:
-        logger.error("Failed to get model cache info", extra={
-            'error_type': type(e).__name__,
-            'error_message': str(e)
-        }, exc_info=True)
+        logger.error(
+            "Failed to get model cache info",
+            extra={"error_type": type(e).__name__, "error_message": str(e)},
+            exc_info=True,
+        )
         raise
+
 
 @router.post("/models/preload")
 async def preload_model(model_path: str):
@@ -256,23 +347,26 @@ async def preload_model(model_path: str):
         # Run preloading in thread pool
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(executor, model_manager.get_model, model_path)
-        
-        logger.info(f"Model preloaded successfully", extra={
-            'model_path': model_path
-        })
-        
+
+        logger.info(f"Model preloaded successfully", extra={"model_path": model_path})
+
         return {
             "message": f"Model {model_path} preloaded successfully",
             "model_path": model_path,
-            "status": "ok"
+            "status": "ok",
         }
     except Exception as e:
-        logger.error("Failed to preload model", extra={
-            'model_path': model_path,
-            'error_type': type(e).__name__,
-            'error_message': str(e)
-        }, exc_info=True)
+        logger.error(
+            "Failed to preload model",
+            extra={
+                "model_path": model_path,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+            },
+            exc_info=True,
+        )
         raise
+
 
 @router.delete("/models/cache")
 async def clear_model_cache():
@@ -280,17 +374,16 @@ async def clear_model_cache():
     try:
         model_manager.clear_cache()
         logger.info("Model cache cleared successfully")
-        
-        return {
-            "message": "Model cache cleared successfully",
-            "status": "ok"
-        }
+
+        return {"message": "Model cache cleared successfully", "status": "ok"}
     except Exception as e:
-        logger.error("Failed to clear model cache", extra={
-            'error_type': type(e).__name__,
-            'error_message': str(e)
-        }, exc_info=True)
+        logger.error(
+            "Failed to clear model cache",
+            extra={"error_type": type(e).__name__, "error_message": str(e)},
+            exc_info=True,
+        )
         raise
+
 
 @router.get("/performance/stats")
 async def get_performance_stats():
@@ -298,11 +391,13 @@ async def get_performance_stats():
     try:
         return performance_monitor.get_performance_summary()
     except Exception as e:
-        logger.error("Failed to get performance stats", extra={
-            'error_type': type(e).__name__,
-            'error_message': str(e)
-        }, exc_info=True)
+        logger.error(
+            "Failed to get performance stats",
+            extra={"error_type": type(e).__name__, "error_message": str(e)},
+            exc_info=True,
+        )
         raise
+
 
 # ==================== CHAMPION DETECTION ENDPOINTS ====================
 
@@ -318,134 +413,248 @@ def detection_zone_to_zone(dz: DetectionZone) -> Zone:
         label=dz.label,
         scale_factor=dz.scale_factor,
         shape=shape,
-        relative=dz.relative
+        relative=dz.relative,
     )
+
 
 @router.post("/detect/champions", response_model=DetectionResponse)
 async def detect_champions(request: DetectionRequest):
     """
     Detect champions in a League of Legends screenshot using template matching.
-    
+
     Upload an image and get back detected champions with their positions and confidence scores.
     """
-    logger.info("Received champion detection request", extra={
-        'version': request.version,
-        'confidence_threshold': request.confidence_threshold,
-        'filter_empty_slots': request.filter_empty_slots,
-        'use_parallel': request.use_parallel,
-        'custom_zones': len(request.zones) if request.zones else 0
-    })
-    
+    logger.info(
+        "Received champion detection request",
+        extra={
+            "version": request.version,
+            "confidence_threshold": request.confidence_threshold,
+            "filter_empty_slots": request.filter_empty_slots,
+            "use_parallel": request.use_parallel,
+            "custom_zones": len(request.zones) if request.zones else 0,
+        },
+    )
+
     try:
         # Run detection in thread pool to avoid blocking
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(executor, _detect_champions, request)
-        
-        logger.info("Champion detection completed", extra={
-            'total_detections': result.total_detections,
-            'zones_processed': result.zones_processed,
-            'processing_time_ms': result.processing_time_ms
-        })
-        
+
+        logger.info(
+            "Champion detection completed",
+            extra={
+                "total_detections": result.total_detections,
+                "zones_processed": result.zones_processed,
+                "processing_time_ms": result.processing_time_ms,
+            },
+        )
+
         return result
-        
+
     except Exception as e:
-        logger.error("Champion detection failed", extra={
-            'error_type': type(e).__name__,
-            'error_message': str(e),
-            'version': request.version,
-            'confidence_threshold': request.confidence_threshold
-        }, exc_info=True)
+        logger.error(
+            "Champion detection failed",
+            extra={
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "version": request.version,
+                "confidence_threshold": request.confidence_threshold,
+            },
+            exc_info=True,
+        )
         raise HTTPException(status_code=500, detail=f"Detection failed: {str(e)}")
+
 
 def _detect_champions(request: DetectionRequest) -> DetectionResponse:
     """Internal detection function to run in thread pool"""
     import time
-    
+
     start_time = time.time()
-    
+
     try:
         # Decode base64 image
         image_data = base64.b64decode(request.image_base64)
         image = Image.open(BytesIO(image_data))
-        
+
         # Convert PIL to OpenCV format
         image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         height, width = image_cv.shape[:2]
+
+        # Check if detection pipeline is available
+        if detection_pipeline is None:
+            logger.warning("Detection pipeline not available, falling back to basic detection")
+            return _detect_champions_fallback(request, image_cv, height, width, start_time)
+
+        # Create zones (use custom or default)
+        zones = None
+        if request.zones:
+            zones = [detection_zone_to_zone(dz) for dz in request.zones]
+
+        # Use the detection pipeline
+        pipeline_result = detection_pipeline.detect_champions_with_ocr_preprocessing(
+            image=image_cv,
+            version=request.version or "15.11.1",
+            confidence_threshold=request.confidence_threshold or 0.65,
+            zones=zones,
+            use_parallel=request.use_parallel or True,
+            ocr_target_text="PICK YOUR CHAMPION",
+            ocr_min_confidence=0.7
+        )
+
+        # Convert pipeline results to API format
+        detection_hits = []
+        for champion_data in pipeline_result['champions']:
+            # Determine which zone this hit belongs to (if zones were provided)
+            hit_zone = champion_data.get('zone')
+            if hit_zone is None and zones:
+                center_x = champion_data['x'] + champion_data['width'] // 2
+                center_y = champion_data['y'] + champion_data['height'] // 2
+                for zone in zones:
+                    abs_zone = zone.to_absolute(width, height)
+                    if (abs_zone.x <= center_x <= abs_zone.x + abs_zone.width and
+                        abs_zone.y <= center_y <= abs_zone.y + abs_zone.height):
+                        hit_zone = zone.label
+                        break
+
+            detection_hits.append(
+                DetectionHit(
+                    champion_name=champion_data['champion_name'],
+                    confidence=champion_data['confidence'],
+                    x=champion_data['x'],
+                    y=champion_data['y'],
+                    width=champion_data['width'],
+                    height=champion_data['height'],
+                    zone=hit_zone,
+                )
+            )
+
+        # Save the visualization image
+        visualization_image = pipeline_result['visualization_image']
+        result_image_path = f"templatematching/images/result/detection_result_{int(time.time())}.png"
         
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(result_image_path), exist_ok=True)
+        cv2.imwrite(result_image_path, visualization_image)
+
+        # Encode result image to base64
+        result_image_base64 = None
+        try:
+            with open(result_image_path, "rb") as f:
+                result_image_base64 = base64.b64encode(f.read()).decode("utf-8")
+        except Exception as e:
+            logger.warning(f"Failed to encode result image: {e}")
+
+        processing_time = pipeline_result['processing_stats']['total_time_ms']
+
+        logger.info(
+            f"Pipeline detection completed: {len(detection_hits)} champions detected, "
+            f"OCR success: {pipeline_result['processing_stats']['ocr_success']}, "
+            f"processing time: {processing_time:.1f}ms"
+        )
+
+        return DetectionResponse(
+            hits=detection_hits,
+            total_detections=len(detection_hits),
+            image_resolution=(width, height),
+            zones_processed=len(zones) if zones else len(Zone.get_default_zones()),
+            processing_time_ms=processing_time,
+            result_image_base64=result_image_base64,
+        )
+
+    except Exception as e:
+        processing_time = (time.time() - start_time) * 1000
+        logger.error(
+            f"Pipeline detection failed after {processing_time:.2f}ms",
+            extra={"error_type": type(e).__name__, "error_message": str(e)},
+        )
+        raise
+
+
+def _detect_champions_fallback(request: DetectionRequest, image_cv, height, width, start_time) -> DetectionResponse:
+    """Fallback to basic detection when pipeline is not available"""
+    import time
+    
+    try:
         # Create zones (use custom or default)
         if request.zones:
             zones = [detection_zone_to_zone(dz) for dz in request.zones]
         else:
             zones = Zone.get_default_zones()
-        
+
         # Initialize detector
         detector = ChampionDetector(
             version=request.version or "15.11.1",
             confidence_threshold=request.confidence_threshold or 0.65,
-            zones=zones
+            zones=zones,
         )
-        
+
         # Perform detection
-        hits = detector.process_image(image_cv, use_parallel=request.use_parallel or True)
-        
+        hits = detector.process_image(
+            image_cv, use_parallel=request.use_parallel or True
+        )
+
         # Convert hits to API format
         detection_hits = []
         for hit in hits:
             template_key, rect, confidence = hit
-            champion_name = template_key.split('_scale_')[0]
+            champion_name = template_key.split("_scale_")[0]
             x, y, w, h = rect
-            
+
             # Determine which zone this hit belongs to
-            center_x, center_y = x + w//2, y + h//2
+            center_x, center_y = x + w // 2, y + h // 2
             hit_zone = None
             for zone in zones:
                 abs_zone = zone.to_absolute(width, height)
-                if (abs_zone.x <= center_x <= abs_zone.x + abs_zone.width and
-                    abs_zone.y <= center_y <= abs_zone.y + abs_zone.height):
+                if (
+                    abs_zone.x <= center_x <= abs_zone.x + abs_zone.width
+                    and abs_zone.y <= center_y <= abs_zone.y + abs_zone.height
+                ):
                     hit_zone = zone.label
                     break
-            
-            detection_hits.append(DetectionHit(
-                champion_name=champion_name,
-                confidence=float(confidence),
-                x=int(x),
-                y=int(y),
-                width=int(w),
-                height=int(h),
-                zone=hit_zone
-            ))
-        
+
+            detection_hits.append(
+                DetectionHit(
+                    champion_name=champion_name,
+                    confidence=float(confidence),
+                    x=int(x),
+                    y=int(y),
+                    width=int(w),
+                    height=int(h),
+                    zone=hit_zone,
+                )
+            )
+
         # Generate result image with annotations
         detector.visualize_hits(image_cv, hits)
-        
+
         # Read the result image and encode to base64
         result_image_path = detector.output_path
         result_image_base64 = None
         try:
-            with open(result_image_path, 'rb') as f:
-                result_image_base64 = base64.b64encode(f.read()).decode('utf-8')
+            with open(result_image_path, "rb") as f:
+                result_image_base64 = base64.b64encode(f.read()).decode("utf-8")
         except Exception as e:
             logger.warning(f"Failed to encode result image: {e}")
-        
+
         processing_time = (time.time() - start_time) * 1000
-        
+
         return DetectionResponse(
             hits=detection_hits,
             total_detections=len(detection_hits),
             image_resolution=(width, height),
             zones_processed=len(zones),
             processing_time_ms=processing_time,
-            result_image_base64=result_image_base64
+            result_image_base64=result_image_base64,
         )
-        
+    
     except Exception as e:
         processing_time = (time.time() - start_time) * 1000
-        logger.error(f"Detection failed after {processing_time:.2f}ms", extra={
-            'error_type': type(e).__name__,
-            'error_message': str(e)
-        })
+        logger.error(
+            f"Fallback detection failed after {processing_time:.2f}ms",
+            extra={"error_type": type(e).__name__, "error_message": str(e)},
+        )
         raise
+
 
 @router.post("/detect/champions/upload", response_model=DetectionResponse)
 async def detect_champions_upload(
@@ -453,7 +662,7 @@ async def detect_champions_upload(
     version: str = "15.11.1",
     confidence_threshold: float = 0.65,
     filter_empty_slots: bool = True,
-    use_parallel: bool = True
+    use_parallel: bool = True,
 ):
     """
     Alternative endpoint that accepts file upload instead of base64.
@@ -461,30 +670,37 @@ async def detect_champions_upload(
     try:
         # Read uploaded file
         contents = await file.read()
-        
+
         # Convert to base64 for internal processing
-        image_base64 = base64.b64encode(contents).decode('utf-8')
-        
+        image_base64 = base64.b64encode(contents).decode("utf-8")
+
         # Create request object
         request = DetectionRequest(
             image_base64=image_base64,
             version=version,
             confidence_threshold=confidence_threshold,
             filter_empty_slots=filter_empty_slots,
-            use_parallel=use_parallel
+            use_parallel=use_parallel,
         )
-        
+
         # Process using the main detection function
         return await detect_champions(request)
-        
+
     except Exception as e:
-        logger.error("File upload detection failed", extra={
-            'filename': file.filename,
-            'content_type': file.content_type,
-            'error_type': type(e).__name__,
-            'error_message': str(e)
-        }, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Upload detection failed: {str(e)}")
+        logger.error(
+            "File upload detection failed",
+            extra={
+                "filename": file.filename,
+                "content_type": file.content_type,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+            },
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Upload detection failed: {str(e)}"
+        )
+
 
 @router.get("/detect/result/{filename}")
 async def get_detection_result(filename: str):
@@ -495,20 +711,21 @@ async def get_detection_result(filename: str):
         result_path = f"templatematching/images/result/{filename}"
         if not os.path.exists(result_path):
             raise HTTPException(status_code=404, detail="Result image not found")
-        
-        return FileResponse(
-            result_path,
-            media_type="image/png",
-            filename=filename
-        )
-        
+
+        return FileResponse(result_path, media_type="image/png", filename=filename)
+
     except Exception as e:
-        logger.error("Failed to serve result image", extra={
-            'filename': filename,
-            'error_type': type(e).__name__,
-            'error_message': str(e)
-        }, exc_info=True)
+        logger.error(
+            "Failed to serve result image",
+            extra={
+                "filename": filename,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+            },
+            exc_info=True,
+        )
         raise
+
 
 @router.get("/detect/zones/default")
 async def get_default_zones():
@@ -527,16 +744,70 @@ async def get_default_zones():
                     "label": zone.label,
                     "scale_factor": zone.scale_factor,
                     "shape": zone.shape.value,
-                    "relative": zone.relative
+                    "relative": zone.relative,
                 }
                 for zone in zones
             ],
             "total_zones": len(zones),
-            "description": "Default zones for 1920x1080 League of Legends interface"
+            "description": "Default zones for 1920x1080 League of Legends interface",
         }
     except Exception as e:
-        logger.error("Failed to get default zones", extra={
-            'error_type': type(e).__name__,
-            'error_message': str(e)
-        }, exc_info=True)
+        logger.error(
+            "Failed to get default zones",
+            extra={"error_type": type(e).__name__, "error_message": str(e)},
+            exc_info=True,
+        )
+        raise
+
+
+@router.get("/detect/pipeline/status")
+async def get_pipeline_status():
+    """
+    Get the status of the detection pipeline.
+    """
+    try:
+        global detection_pipeline
+        
+        result = {
+            "status": "ok",
+            "pipeline_info": {
+                "pipeline_available": detection_pipeline is not None,
+                "uses_ocr_preprocessing": detection_pipeline is not None,
+                "fallback_available": True,
+            },
+            "description": "Detection pipeline uses OCR preprocessing for better accuracy"
+        }
+        
+        if detection_pipeline is not None:
+            # Get OCR detector info
+            ocr_detector = detection_pipeline.ocr_detector
+            
+            # Add OCR configuration details
+            ocr_config = {
+                "target_text": ocr_detector.config.target_text,
+                "min_confidence": ocr_detector.config.min_confidence,
+                "languages": [lang.value for lang in ocr_detector.config.languages],
+                "case_sensitive": ocr_detector.config.case_sensitive,
+            }
+            
+            preprocessing_method = getattr(ocr_detector, 'preprocessing_method', None)
+            method_value = preprocessing_method.value if preprocessing_method else None
+            
+            additional_info = {
+                "ocr_config": ocr_config,
+                "preprocessing_enabled": getattr(ocr_detector, 'enable_preprocessing', False),
+                "preprocessing_method": method_value,
+                "gpu_enabled": ocr_detector.gpu
+            }
+            
+            result["pipeline_info"].update(additional_info)
+        
+        return result
+        
+    except Exception as e:
+        logger.error(
+            "Failed to get pipeline status",
+            extra={"error_type": type(e).__name__, "error_message": str(e)},
+            exc_info=True,
+        )
         raise

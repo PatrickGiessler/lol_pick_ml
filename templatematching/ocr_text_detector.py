@@ -98,8 +98,8 @@ class OCRTextDetector:
         """Initialize EasyOCR reader with specified languages."""
         try:
             import os
-            project_dir = os.path.dirname(os.path.abspath(__file__))
-            model_storage_directory = os.path.join(project_dir, '..', '.EasyOCR')
+            # Use /tmp directory which should be writable in containers
+            model_storage_directory = "/tmp/.EasyOCR"
             os.makedirs(model_storage_directory, exist_ok=True)
             self.reader = easyocr.Reader(
                 [lang.value for lang in self.config.languages],

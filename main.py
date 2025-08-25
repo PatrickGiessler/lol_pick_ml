@@ -21,6 +21,12 @@ load_dotenv()
 setup_logging()
 logger = get_logger(__name__)
 
+# Test logging immediately after setup
+logger.info("🚀 Application starting up...")
+logger.debug("🔍 Debug logging is enabled")
+logger.warning("⚠️ Warning logging is enabled")
+print("🖥️ STDOUT: Direct print test - if you see this, stdout works", flush=True)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize models and connections on startup."""
@@ -312,11 +318,17 @@ def main():
     logger.info("Champion detection endpoint available at: http://localhost:8100/detect/champions")
     logger.info("API documentation available at: http://localhost:8100/docs")
     
+    # Get log level from environment or default to INFO
+    import os
+    log_level = os.getenv('LOG_LEVEL', 'INFO').lower()
+    
     uvicorn.run(
         app,
         host="0.0.0.0",
         port=8100,
-        log_level="info"
+        log_level=log_level,
+        access_log=True,
+        use_colors=False  # Better for Docker logs
     )
 
 if __name__ == "__main__":

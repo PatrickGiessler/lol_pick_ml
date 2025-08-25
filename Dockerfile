@@ -8,7 +8,9 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     POETRY_NO_INTERACTION=1 \
     POETRY_VENV_IN_PROJECT=0 \
-    POETRY_CACHE_DIR=/tmp/poetry_cache
+    POETRY_CACHE_DIR=/tmp/poetry_cache \
+    LOG_LEVEL=INFO \
+    PYTHONIOENCODING=utf-8
 
 # Install system dependencies for OpenCV and other libraries
 RUN apt-get update && apt-get install -y \

@@ -32,20 +32,30 @@ def setup_logging(
         format_parts = []
         if include_timestamp:
             format_parts.append('%(asctime)s')
-        format_parts.append('%(name)s')
+        format_parts.append('[%(name)s]')
         format_parts.append('%(levelname)s')
         format_parts.append('%(message)s')
         format_string = ' - '.join(format_parts)
+    
+    # Create console handler with immediate flushing for Docker
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(logging.Formatter(format_string))
+    console_handler.flush = sys.stdout.flush  # Force immediate flush
     
     # Configure root logger
     logging.basicConfig(
         level=getattr(logging, log_level),
         format=format_string,
-        handlers=[
-            logging.StreamHandler(sys.stdout)
-        ],
+        handlers=[console_handler],
         force=True  # Override any existing configuration
     )
+    
+    # Ensure all loggers propagate to root
+    logging.getLogger().handlers[0].setLevel(getattr(logging, log_level))
+    
+    # Disable uvicorn's default logger configuration interference
+    logging.getLogger("uvicorn").handlers = []
+    logging.getLogger("uvicorn.access").handlers = []
     
     # Set specific loggers
     configure_ml_loggers(log_level)

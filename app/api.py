@@ -813,3 +813,36 @@ async def get_pipeline_status():
             exc_info=True,
         )
         raise
+
+
+@router.get("/health")
+async def health_check():
+    """Health check endpoint that also tests logging."""
+    logger.info("Health check requested")
+    logger.debug("Debug message from health check")
+    logger.warning("Warning message from health check")
+    return {"status": "healthy", "logging": "active"}
+
+
+@router.get("/test/logging")
+async def test_logging():
+    """Test endpoint to verify logging is working in Docker."""
+    import sys
+    
+    # Test all log levels
+    logger.debug("🔍 DEBUG: This is a debug message")
+    logger.info("ℹ️ INFO: This is an info message")
+    logger.warning("⚠️ WARNING: This is a warning message")
+    logger.error("❌ ERROR: This is an error message")
+    
+    # Print to stdout directly as well
+    print("🖥️ STDOUT: Direct print to stdout", flush=True)
+    print("🖥️ STDERR: Direct print to stderr", file=sys.stderr, flush=True)
+    
+    return {
+        "message": "Logging test completed",
+        "handlers": len(logging.getLogger().handlers),
+        "log_level": logging.getLogger().level,
+        "stdout_isatty": sys.stdout.isatty(),
+        "stderr_isatty": sys.stderr.isatty()
+    }

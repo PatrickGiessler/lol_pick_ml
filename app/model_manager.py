@@ -204,7 +204,7 @@ class ModelManager:
             
             logger.info(f"OCR detector created and cached successfully", extra={
                 'detector_id': detector_id,
-                'config': config.dict() if config else "default",
+                'config': config.model_dump_json() if config else "default",
                 'gpu_enabled': gpu,
                 'cached_detectors_count': len(self._ocr_detectors)
             })

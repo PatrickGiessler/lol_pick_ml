@@ -100,12 +100,15 @@ class OCRTextDetector:
             import os
             # Use /tmp directory which should be writable in containers
             model_storage_directory = "/tmp/.EasyOCR"
+            user_network_directory = "/tmp/.EasyOCR/user_network"
             os.makedirs(model_storage_directory, exist_ok=True)
+            os.makedirs(user_network_directory, exist_ok=True)
             self.reader = easyocr.Reader(
                 [lang.value for lang in self.config.languages],
                 gpu=self.gpu,
                 verbose=self.verbose,
-                model_storage_directory=model_storage_directory
+                model_storage_directory=model_storage_directory,
+                user_network_directory=user_network_directory
             )
             logger.info("EasyOCR reader initialized successfully")
         except Exception as e:

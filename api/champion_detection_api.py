@@ -8,6 +8,7 @@ import io
 import time
 from typing import List, Optional, Dict, Any
 import cv2
+from fastapi.concurrency import asynccontextmanager
 import numpy as np
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks
 from fastapi.responses import JSONResponse, FileResponse
@@ -166,9 +167,9 @@ async def process_image_data(image_data: bytes) -> np.ndarray:
         return opencv_image
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image format: {str(e)}")
-
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan events."""
     """Initialize the champion detector on startup"""
     global detector
     try:
@@ -183,6 +184,9 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize Champion Detector: {e}")
         raise
+    yield
+
+
 
 @app.get("/", response_class=JSONResponse)
 async def root():

@@ -9,6 +9,8 @@ import cv2
 import numpy as np
 import base64
 import os
+import time
+import traceback
 from io import BytesIO
 from PIL import Image
 
@@ -408,6 +410,15 @@ async def detect_champions(request: DetectionRequest):
 
     Upload an image and get back detected champions with their positions and confidence scores.
     """
+    request_start_time = time.time()
+    
+    # Calculate image size for logging
+    try:
+        image_data = base64.b64decode(request.image_base64)
+        image_size_kb = len(image_data) / 1024
+    except Exception:
+        image_size_kb = 0
+    
     logger.info(
         "Received champion detection request",
         extra={
@@ -416,6 +427,8 @@ async def detect_champions(request: DetectionRequest):
             "filter_empty_slots": request.filter_empty_slots,
             "use_parallel": request.use_parallel,
             "custom_zones": len(request.zones) if request.zones else 0,
+            "image_size_kb": round(image_size_kb, 2),
+            "request_id": id(request),  # Simple request ID for tracking
         },
     )
 
@@ -424,18 +437,27 @@ async def detect_champions(request: DetectionRequest):
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(executor, _detect_champions, request)
 
+        total_time = (time.time() - request_start_time) * 1000
+        
         logger.info(
-            "Champion detection completed",
+            "Champion detection completed successfully",
             extra={
                 "total_detections": result.total_detections,
                 "zones_processed": result.zones_processed,
                 "processing_time_ms": result.processing_time_ms,
+                "total_request_time_ms": round(total_time, 2),
+                "image_size_kb": round(image_size_kb, 2),
+                "request_id": id(request),
+                "pipeline_used": "detection_pipeline",
+                "result_image_generated": result.result_image_base64 is not None
             },
         )
 
         return result
 
     except Exception as e:
+        total_time = (time.time() - request_start_time) * 1000
+        
         logger.error(
             "Champion detection failed",
             extra={
@@ -443,6 +465,10 @@ async def detect_champions(request: DetectionRequest):
                 "error_message": str(e),
                 "version": request.version,
                 "confidence_threshold": request.confidence_threshold,
+                "image_size_kb": round(image_size_kb, 2),
+                "request_id": id(request),
+                "total_request_time_ms": round(total_time, 2),
+                "traceback": traceback.format_exc()
             },
             exc_info=True,
         )
@@ -451,33 +477,91 @@ async def detect_champions(request: DetectionRequest):
 
 def _detect_champions(request: DetectionRequest) -> DetectionResponse:
     """Internal detection function to run in thread pool"""
-    import time
-
     start_time = time.time()
+    request_id = id(request)
+    
+    logger.info(f"Starting champion detection processing", extra={
+        "request_id": request_id,
+        "version": request.version,
+        "confidence_threshold": request.confidence_threshold,
+        "use_parallel": request.use_parallel
+    })
 
     try:
-        # Decode base64 image
+        # Step 1: Decode base64 image
+        step_start = time.time()
+        logger.debug(f"Decoding base64 image...", extra={"request_id": request_id})
+        
         image_data = base64.b64decode(request.image_base64)
         image = Image.open(BytesIO(image_data))
+        
+        decode_time = (time.time() - step_start) * 1000
+        logger.debug(f"Image decoded successfully", extra={
+            "request_id": request_id,
+            "decode_time_ms": round(decode_time, 2),
+            "image_format": image.format,
+            "image_mode": image.mode,
+            "image_size": image.size
+        })
 
-        # Convert PIL to OpenCV format
+        # Step 2: Convert PIL to OpenCV format
+        step_start = time.time()
         image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         height, width = image_cv.shape[:2]
+        
+        convert_time = (time.time() - step_start) * 1000
+        logger.debug(f"Image converted to OpenCV format", extra={
+            "request_id": request_id,
+            "convert_time_ms": round(convert_time, 2),
+            "opencv_shape": (height, width),
+            "opencv_dtype": str(image_cv.dtype)
+        })
 
-        # Get detection pipeline from model_manager
+        # Step 3: Get detection pipeline from model_manager
+        step_start = time.time()
+        logger.debug(f"Getting detection pipeline from model_manager...", extra={"request_id": request_id})
+        
         detection_pipeline = model_manager.get_detection_pipeline()
         if detection_pipeline is None:
+            logger.error(f"Detection pipeline not available", extra={
+                "request_id": request_id,
+                "pipeline_status": model_manager.get_pipeline_status()
+            })
             raise HTTPException(
                 status_code=500, 
                 detail="Detection pipeline not available. Please contact administrator."
             )
+        
+        pipeline_get_time = (time.time() - step_start) * 1000
+        logger.debug(f"Detection pipeline retrieved successfully", extra={
+            "request_id": request_id,
+            "pipeline_get_time_ms": round(pipeline_get_time, 2),
+            "pipeline_type": type(detection_pipeline).__name__
+        })
 
-        # Create zones (use custom or default)
+        # Step 4: Prepare zones
+        step_start = time.time()
         zones = None
         if request.zones:
             zones = [detection_zone_to_zone(dz) for dz in request.zones]
+            logger.debug(f"Custom zones converted", extra={
+                "request_id": request_id,
+                "zones_count": len(zones),
+                "zone_labels": [z.label for z in zones]
+            })
+        else:
+            logger.debug(f"Using default zones", extra={"request_id": request_id})
+        
+        zones_time = (time.time() - step_start) * 1000
 
-        # Use the detection pipeline
+        # Step 5: Run the detection pipeline
+        step_start = time.time()
+        logger.info(f"Starting OCR preprocessing and champion detection", extra={
+            "request_id": request_id,
+            "ocr_target_text": "PICK YOUR CHAMPION",
+            "ocr_min_confidence": 0.7
+        })
+        
         pipeline_result = detection_pipeline.detect_champions_with_ocr_preprocessing(
             image=image_cv,
             version=request.version or "15.11.1",
@@ -487,12 +571,25 @@ def _detect_champions(request: DetectionRequest) -> DetectionResponse:
             ocr_target_text="PICK YOUR CHAMPION",
             ocr_min_confidence=0.7
         )
+        
+        pipeline_time = (time.time() - step_start) * 1000
+        logger.info(f"Pipeline processing completed", extra={
+            "request_id": request_id,
+            "pipeline_time_ms": round(pipeline_time, 2),
+            "ocr_success": pipeline_result['processing_stats']['ocr_success'],
+            "champions_detected": len(pipeline_result['champions']),
+            "pipeline_stats": pipeline_result['processing_stats']
+        })
 
-        # Convert pipeline results to API format
+        # Step 6: Convert pipeline results to API format
+        step_start = time.time()
         detection_hits = []
         if pipeline_result['champions']:
+            logger.debug(f"Converting {len(pipeline_result['champions'])} detections to API format", 
+                        extra={"request_id": request_id})
+            
             for champion_data in pipeline_result['champions']:
-                # Determine which zone this hit belongs to (if zones were provided)
+                # Determine which zone this hit belongs to
                 hit_zone = champion_data.get('zone')
                 if hit_zone is None and zones:
                     center_x = champion_data['x'] + champion_data['width'] // 2
@@ -515,8 +612,14 @@ def _detect_champions(request: DetectionRequest) -> DetectionResponse:
                         zone=hit_zone,
                     )
                 )
+                
+                logger.debug(f"Detection: {champion_data['champion_name']} (confidence: {champion_data['confidence']:.3f})", 
+                           extra={"request_id": request_id})
+        
+        conversion_time = (time.time() - step_start) * 1000
 
-        # Convert visualization image to base64
+        # Step 7: Convert visualization image to base64
+        step_start = time.time()
         visualization_image: np.ndarray = pipeline_result['visualization_image']
         result_image_base64 = None
         try:
@@ -525,12 +628,36 @@ def _detect_champions(request: DetectionRequest) -> DetectionResponse:
             if success:
                 # Convert to base64 string
                 result_image_base64 = base64.b64encode(encoded_image.tobytes()).decode('utf-8')
+                logger.debug(f"Visualization image encoded to base64", extra={
+                    "request_id": request_id,
+                    "encoded_size_kb": round(len(result_image_base64) / 1024, 2)
+                })
             else:
-                logger.warning("Failed to encode visualization image to PNG")
+                logger.warning("Failed to encode visualization image to PNG", extra={"request_id": request_id})
         except Exception as e:
-            logger.warning(f"Failed to convert visualization image to base64: {e}")
+            logger.warning(f"Failed to convert visualization image to base64: {e}", extra={"request_id": request_id})
         
+        encoding_time = (time.time() - step_start) * 1000
         processing_time = pipeline_result['processing_stats']['total_time_ms']
+        total_time = (time.time() - start_time) * 1000
+
+        # Final logging
+        logger.info(f"Champion detection completed successfully", extra={
+            "request_id": request_id,
+            "total_detections": len(detection_hits),
+            "zones_processed": len(zones) if zones else len(Zone.get_default_zones()),
+            "pipeline_processing_time_ms": round(processing_time, 2),
+            "total_function_time_ms": round(total_time, 2),
+            "timing_breakdown": {
+                "decode_time_ms": round(decode_time, 2),
+                "convert_time_ms": round(convert_time, 2),
+                "pipeline_get_time_ms": round(pipeline_get_time, 2),
+                "zones_time_ms": round(zones_time, 2),
+                "pipeline_time_ms": round(pipeline_time, 2),
+                "conversion_time_ms": round(conversion_time, 2),
+                "encoding_time_ms": round(encoding_time, 2)
+            }
+        })
 
         return DetectionResponse(
             hits=detection_hits,
@@ -544,8 +671,15 @@ def _detect_champions(request: DetectionRequest) -> DetectionResponse:
     except Exception as e:
         processing_time = (time.time() - start_time) * 1000
         logger.error(
-            f"Pipeline detection failed after {processing_time:.2f}ms",
-            extra={"error_type": type(e).__name__, "error_message": str(e)},
+            f"Pipeline detection failed",
+            extra={
+                "request_id": request_id,
+                "processing_time_ms": round(processing_time, 2),
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "traceback": traceback.format_exc()
+            },
+            exc_info=True
         )
         raise
 

@@ -258,16 +258,9 @@ class RabbitMQHandler:
         self.connection = pika.BlockingConnection(parameters)
         self.channel = self.connection.channel()
         
-        # For NestJS microservices, we might need to declare an exchange
-        exchange_name = ''  # Default exchange
-        self.channel.exchange_declare(exchange=exchange_name, exchange_type='direct')
-        
-        # Declare queue with the pattern as queue name
+        # Declare queue directly without using default exchange operations that are restricted
         queue_result = self.channel.queue_declare(queue=pattern, durable=True)
         queue_name = queue_result.method.queue
-        
-        # Bind the queue to the exchange with the pattern as routing key
-        self.channel.queue_bind(exchange=exchange_name, queue=queue_name, routing_key=pattern)
         
         # Store the actual queue name
         self.queue_name = queue_name

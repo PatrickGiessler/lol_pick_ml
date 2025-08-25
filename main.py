@@ -1,12 +1,15 @@
 from contextlib import asynccontextmanager
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
 from app.api import router
 from dotenv import load_dotenv
 from app.message_handler import RabbitMQHandler
 from app.logging_config import setup_logging, get_logger
 from app.model_manager import model_manager
 import threading
+import time
+import traceback
 
 from templatematching.ocr_text_detector import OCRConfig, OCRLanguage
 
@@ -17,6 +20,86 @@ load_dotenv()
 # Configure enhanced logging
 setup_logging()
 logger = get_logger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize models and connections on startup."""
+    logger.info("Starting up application...")
+    
+    # Preload commonly used models
+    try:
+        common_models = [
+            "model/saved_model/test.keras",
+            "model/saved_model/15.11.1.keras"
+        ]
+        logger.info(f"Preloading {len(common_models)} ML models...")
+        model_manager.preload_models(common_models)
+        
+        # Preload OCR detectors
+        preload_configs = {
+            "high_accuracy": {
+                "config": OCRConfig(
+                    languages=[OCRLanguage.ENGLISH, OCRLanguage.GERMAN, OCRLanguage.SPANISH],
+                    min_confidence=0.9,
+                    target_text="",
+                    case_sensitive=True
+                ),
+                "gpu": True,
+                "verbose": False
+            }
+        }
+        logger.info(f"Preloading {len(preload_configs)} OCR detectors...")
+        model_manager.preload_ocr_detectors(preload_configs)
+        
+        # Initialize detection pipeline
+        try:
+            logger.info("Initializing detection pipeline...")
+            config = OCRConfig(
+                languages=[OCRLanguage.ENGLISH, OCRLanguage.GERMAN, OCRLanguage.SPANISH],
+                min_confidence=0.7,
+                target_text="pick your champion",
+                case_sensitive=False,
+            )
+            
+            pipeline = model_manager.initialize_detection_pipeline(
+                ocr_config=config,
+                gpu=True,
+                verbose=False,
+                use_enhanced_ocr=True
+            )
+            
+            pipeline_status = model_manager.get_pipeline_status()
+            logger.info("Detection pipeline initialized successfully", extra={
+                "pipeline_status": pipeline_status,
+                "ocr_type": pipeline_status.get("ocr_type", "unknown"),
+                "gpu_enabled": pipeline_status.get("gpu_enabled", False)
+            })
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize detection pipeline: {e}", exc_info=True)
+            # Don't fail startup, but log the issue prominently
+            logger.warning("Application will start without detection pipeline!")
+
+        logger.info("Model and pipeline preloading completed successfully")
+        
+    except Exception as e:
+        logger.warning(f"Failed to preload some models: {e}", exc_info=True)
+    
+    logger.info("Application startup completed successfully")
+    yield
+    """Cleanup on shutdown."""
+    logger.info("Shutting down application...")
+    
+    # Clear model cache
+    try:
+        model_manager.clear_cache()
+        model_manager.clear_ocr_cache()
+        model_manager.clear_detection_pipeline()
+        logger.info("All caches cleared successfully")
+    except Exception as e:
+        logger.warning(f"Error during cache cleanup: {e}")
+    
+    logger.info("Application shutdown completed")
 
 # Create FastAPI app
 app = FastAPI(
@@ -33,53 +116,117 @@ app = FastAPI(
     
     Supports both REST API and RabbitMQ message patterns for flexible integration.
     """,
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Include the API router with all endpoints (including /train and /predict)
 app.include_router(router)
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Initialize models and connections on startup."""
-    logger.info("Starting up application...")
+
+# Add request logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log all incoming HTTP requests with detailed information."""
+    start_time = time.time()
     
-    # Preload commonly used models
-    try:
-        common_models = [
-            "model/saved_model/test.keras",
-            "model/saved_model/15.11.1.keras"
-        ]
-        logger.info("Preloading models...")
-        model_manager.preload_models(common_models)
-        preload_configs = {
-            "high_accuracy": {
-                "config": OCRConfig(
-                    languages=[OCRLanguage.ENGLISH, OCRLanguage.GERMAN, OCRLanguage.SPANISH],
-                    min_confidence=0.9,
-                    target_text="",
-                    case_sensitive=True
-                ),
-                "gpu": True,
-                "verbose": False
-            }
+    # Extract request details
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    content_length = request.headers.get("content-length", "0")
+    
+    logger.info(
+        f"Incoming request: {request.method} {request.url.path}",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "query_params": str(request.query_params),
+            "client_ip": client_ip,
+            "user_agent": user_agent,
+            "content_length": content_length,
+            "headers": dict(request.headers)
         }
-        model_manager.preload_ocr_detectors(preload_configs)
-
-        logger.info("Model preloading completed")
+    )
+    
+    try:
+        # Process the request
+        response = await call_next(request)
+        
+        # Calculate processing time
+        process_time = time.time() - start_time
+        
+        logger.info(
+            f"Request completed: {request.method} {request.url.path} - Status: {response.status_code}",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "process_time_ms": round(process_time * 1000, 2),
+                "client_ip": client_ip
+            }
+        )
+        
+        # Add processing time header
+        response.headers["X-Process-Time"] = str(process_time)
+        return response
+        
     except Exception as e:
-        logger.warning(f"Failed to preload some models: {e}")
-    
-    logger.info("Application startup completed")
-    yield
-    """Cleanup on shutdown."""
-    logger.info("Shutting down application...")
-    
-    # Clear model cache
-    model_manager.clear_cache()
-    model_manager.clear_ocr_cache()
-    
-    logger.info("Application shutdown completed")
+        # Log the error with full details
+        process_time = time.time() - start_time
+        
+        logger.error(
+            f"Request failed: {request.method} {request.url.path}",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "client_ip": client_ip,
+                "process_time_ms": round(process_time * 1000, 2),
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "traceback": traceback.format_exc()
+            },
+            exc_info=True
+        )
+        
+        # Return appropriate error response
+        if isinstance(e, HTTPException):
+            return JSONResponse(
+                status_code=e.status_code,
+                content={"detail": e.detail, "error_type": type(e).__name__}
+            )
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": "Internal server error",
+                    "error_type": type(e).__name__,
+                    "message": str(e)
+                }
+            )
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler for unhandled exceptions."""
+    logger.error(
+        f"Unhandled exception in {request.method} {request.url.path}",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "client_ip": request.client.host if request.client else "unknown",
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "traceback": traceback.format_exc()
+        },
+        exc_info=True
+    )
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            "error_type": type(exc).__name__,
+            "message": str(exc)
+        }
+    )
 @app.get("/health")
 async def health():
     """Async health check endpoint"""

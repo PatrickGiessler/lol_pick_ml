@@ -10,11 +10,30 @@ from re import S
 import easyocr
 import cv2
 import numpy as np
-from typing import List, Optional, Tuple, Dict, Any, Union
+from typing import List, Optional, Tuple, Dict, Any, Union, NamedTuple
 from pathlib import Path
 from pydantic import BaseModel, field_validator
 from enum import Enum
 import logging
+
+from templatematching.detection_pipeline import CropInfo, CropRegion, DetectionInfo, BoundingBox, Point, Size, Offset
+
+
+# Specific tuple types for better type safety
+class ClientBounds(NamedTuple):
+    """League client bounds (x, y, width, height)."""
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+class ColorBGR(NamedTuple):
+    """BGR color values for OpenCV."""
+    blue: int
+    green: int
+    red: int
+
 
 # Type alias for EasyOCR results
 OCRResult = Tuple[List[List[int]], str, float]  # (coordinates, text, confidence)
@@ -43,7 +62,7 @@ class TextDetectionResult(BaseModel):
     """Result of text detection"""
     text: str
     confidence: float
-    bbox: Tuple[int, int, int, int]  # (x, y, width, height)
+    bbox: BoundingBox  # (x, y, width, height)
     coordinates: List[List[int]]  # Original polygon coordinates from EasyOCR
     
     class Config:
@@ -225,7 +244,7 @@ class OCRTextDetector:
         self,
         image: np.ndarray,
         detections: List[TextDetectionResult],
-        color: Tuple[int, int, int] = (0, 0, 255),  # Red in BGR
+        color: ColorBGR = ColorBGR(blue=0, green=0, red=255),  # Red in BGR
         thickness: int = 3,
         show_confidence: bool = True,
         font_scale: float = 0.7
@@ -249,7 +268,8 @@ class OCRTextDetector:
         for detection in detections:
             # Draw polygon from original coordinates
             points = np.array(detection.coordinates, dtype=np.int32)
-            cv2.polylines(result_image, [points], isClosed=True, color=color, thickness=thickness)
+            color_tuple = (color.blue, color.green, color.red)
+            cv2.polylines(result_image, [points], isClosed=True, color=color_tuple, thickness=thickness)
             
             # Add text label
             x, y = points[0]
@@ -265,7 +285,7 @@ class OCRTextDetector:
                 result_image,
                 (x, y - text_size[1] - 10),
                 (x + text_size[0], y),
-                color,
+                color_tuple,
                 -1
             )
             
@@ -369,29 +389,33 @@ class OCRTextDetector:
             self.config.target_text = original_target
     
     @staticmethod
-    def _coordinates_to_bbox(coordinates: List[List[int]]) -> Tuple[int, int, int, int]:
+    def _coordinates_to_bbox(coordinates: List[List[int]]) -> BoundingBox:
         """Convert polygon coordinates to bounding box (x, y, width, height)."""
         points = np.array(coordinates)
         x_min, y_min = np.min(points, axis=0)
         x_max, y_max = np.max(points, axis=0)
-        return (int(x_min), int(y_min), int(x_max - x_min), int(y_max - y_min))
+        return BoundingBox(
+            x=int(x_min),
+            y=int(y_min), 
+            width=int(x_max - x_min),
+            height=int(y_max - y_min)
+        )
 
-    def calc_league_client_size_and_position(self,detection: TextDetectionResult) -> Tuple[int, int, int, int]:
-        text_height = detection.bbox[3]  # Height from bounding box
-        text_width = detection.bbox[2]  # Width from bounding box
-        text_center_x = detection.bbox[0] + text_width // 2
-        text_upper_y = detection.bbox[1]
+    def calc_league_client_size_and_position(self, detection: TextDetectionResult) -> ClientBounds:
+        text_height = detection.bbox.height  # Height from bounding box
+        text_width = detection.bbox.width  # Width from bounding box
+        text_center_x = detection.bbox.x + text_width // 2
+        text_upper_y = detection.bbox.y
         client_y = text_upper_y - ceil(text_height * 0.5)  # Example offset
         # Calculate League client bounds based on text position
         client_height = ceil(text_height * OCRTextDetector.client_height_multiplier)  # Example scaling factor
         client_width = ceil(text_width *  OCRTextDetector.client_width_multiplier)  # Example scaling factor
         client_x = text_center_x - client_width // 2
-        return client_x, client_y, client_width, client_height
+        return ClientBounds(x=client_x, y=client_y, width=client_width, height=client_height)
 
-    def draw_league_client_bounds(self, image: np.ndarray, bounds: Tuple[int, int, int, int]) -> np.ndarray:
+    def draw_league_client_bounds(self, image: np.ndarray, bounds: ClientBounds) -> np.ndarray:
         """Draw the League client bounds on the image."""
-        x, y, w, h = bounds
-        cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.rectangle(image, (bounds.x, bounds.y), (bounds.x + bounds.width, bounds.y + bounds.height), (0, 255, 0), 2)
         cv2.imwrite("ocr_detection_with_client_bounds.png", image)
         return image
 
@@ -400,7 +424,7 @@ class OCRTextDetector:
         image: Union[np.ndarray, str, Path],
         target_text: Optional[str] = None,
         min_confidence: Optional[float] = None
-    ) -> Dict[str, Any]:
+    ) -> CropInfo:
         """
         Detect League client region using OCR and crop the image.
         
@@ -435,15 +459,21 @@ class OCRTextDetector:
         
         if not detections:
             logger.warning("No text detections found - OCR failed")
-            return {
-                'success': False,
-                'cropped_image': None,
-                'crop_region': {},
-                'detection_info': None,
-                'offset': (0, 0),
-                'scale_factor': 1.0,
-                'original_size': (original_width, original_height)
+            empty_crop_region: CropRegion = {
+                'x': 0,
+                'y': 0,
+                'width': original_width,
+                'height': original_height
             }
+            return CropInfo(
+                success=False,
+                cropped_image=None,
+                crop_region=empty_crop_region,
+                detection_info=None,
+                offset=Offset(x=0, y=0),
+                scale_factor=1.0,
+                original_size=Size(width=original_width, height=original_height)
+            )
         
         # Use the highest confidence detection
         best_detection = max(detections, key=lambda d: d.confidence)
@@ -452,55 +482,69 @@ class OCRTextDetector:
         # Calculate League client bounds based on detected text
         try:
             # Use existing method to calculate client bounds
-            client_x, client_y, client_width, client_height = self.calc_league_client_size_and_position(best_detection)
+            client_bounds = self.calc_league_client_size_and_position(best_detection)
             
             # Ensure bounds are within image limits
-            crop_x = max(0, client_x)
-            crop_y = max(0, client_y)
-            crop_w = min(client_width, original_width - crop_x)
-            crop_h = min(client_height, original_height - crop_y)
+            crop_x = max(0, client_bounds.x)
+            crop_y = max(0, client_bounds.y)
+            crop_w = min(client_bounds.width, original_width - crop_x)
+            crop_h = min(client_bounds.height, original_height - crop_y)
             
             # Perform the crop
             cropped_image = image_array[crop_y:crop_y+crop_h, crop_x:crop_x+crop_w]
             
             logger.info(f"Cropped region: ({crop_x}, {crop_y}) {crop_w}x{crop_h}")
             
-            return {
-                'success': True,
-                'cropped_image': cropped_image,
-                'crop_region': {
-                    'x': crop_x,
-                    'y': crop_y,
-                    'width': crop_w,
-                    'height': crop_h
-                },
-                'detection_info': {
-                    'text': best_detection.text,
-                    'confidence': best_detection.confidence,
-                    'bbox': best_detection.bbox,
-                    'coordinates': best_detection.coordinates
-                },
-                'offset': (crop_x, crop_y),
-                'scale_factor': 1.0,
-                'original_size': (original_width, original_height)
+            crop_region: CropRegion = {
+                'x': crop_x,
+                'y': crop_y,
+                'width': crop_w,
+                'height': crop_h
             }
+            
+            detection_info: DetectionInfo = {
+                'text': best_detection.text,
+                'confidence': best_detection.confidence,
+                'bbox': best_detection.bbox,
+                'coordinates': best_detection.coordinates
+            }
+            
+            return CropInfo(
+                success=True,
+                cropped_image=cropped_image,
+                crop_region=crop_region,
+                detection_info=detection_info,
+                offset=Offset(x=crop_x, y=crop_y),
+                scale_factor=1.0,
+                original_size=Size(width=original_width, height=original_height)
+            )
             
         except Exception as e:
             logger.error(f"Failed to calculate crop region: {e}")
-            return {
-                'success': False,
-                'cropped_image': None,
-                'crop_region': {},
-                'detection_info': {
-                    'text': best_detection.text,
-                    'confidence': best_detection.confidence,
-                    'bbox': best_detection.bbox,
-                    'coordinates': best_detection.coordinates
-                },
-                'offset': (0, 0),
-                'scale_factor': 1.0,
-                'original_size': (original_width, original_height)
+            
+            empty_crop_region: CropRegion = {
+                'x': 0,
+                'y': 0,
+                'width': original_width,
+                'height': original_height
             }
+            
+            detection_info: DetectionInfo = {
+                'text': best_detection.text,
+                'confidence': best_detection.confidence,
+                'bbox': best_detection.bbox,
+                'coordinates': best_detection.coordinates
+            }
+            
+            return CropInfo(
+                success=False,
+                cropped_image=None,
+                crop_region=empty_crop_region,
+                detection_info=detection_info,
+                offset=Offset(x=0, y=0),
+                scale_factor=1.0,
+                original_size=Size(width=original_width, height=original_height)
+            )
 
 # Convenience functions
 def detect_champion_selection_text(

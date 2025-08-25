@@ -7,12 +7,13 @@ import cv2
 import numpy as np
 
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, NamedTuple
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
 from pydantic import BaseModel, field_validator, model_validator
+from .detection_pipeline import BoundingBox
 from app.logging_config import get_logger
 from pathlib import Path
 import MTM, cv2
@@ -21,6 +22,13 @@ from minio_storage.minio_client import MinioClient
 from templatematching.template_image import Shape, TemplateImage, TemplateImageManager
 
 logger = get_logger(__name__)
+
+
+class ChampionHit(NamedTuple):
+    """Represents a champion detection hit with template name, bounding box, and confidence."""
+    template_name: str
+    bbox: BoundingBox
+    confidence: float
 
 
 from pydantic import BaseModel, field_validator, model_validator
@@ -199,7 +207,7 @@ class ChampionDetector:
         except Exception as e:
             logger.error(f"Failed to load champion templates: {e}")
             raise
-    def process_image(self, image: np.ndarray, use_parallel: bool = True) -> List[Tuple[str, Tuple[int, int, int, int], float]]:
+    def process_image(self, image: np.ndarray, use_parallel: bool = True) -> List[ChampionHit]:
         """Process image with zone cropping and optional parallel processing for better performance."""
         if image is None:
             raise ValueError("Input image is None")
@@ -241,7 +249,7 @@ class ChampionDetector:
         
         return all_hits
     
-    def _process_zone(self, input_gray: np.ndarray, zone: Zone) -> List[Tuple[str, Tuple[int, int, int, int], float]]:
+    def _process_zone(self, input_gray: np.ndarray, zone: Zone) -> List[ChampionHit]:
         """Process a single zone with cropping for better performance."""
         # Crop image to zone (with small padding to avoid edge effects)
         padding = 10
@@ -318,8 +326,8 @@ class ChampionDetector:
             hx, hy, hw, hh = rect
             
             # Adjust coordinates back to original image
-            adjusted_rect = (hx + x1, hy + y1, hw, hh)
-            adjusted_hit = (template_key, adjusted_rect, confidence)
+            adjusted_rect = BoundingBox(x=int(hx + x1), y=int(hy + y1), width=int(hw), height=int(hh))
+            adjusted_hit = ChampionHit(template_name=template_key, bbox=adjusted_rect, confidence=confidence)
             
             # Validate that hit center is still within original zone bounds
             center_x = hx + x1 + hw // 2
@@ -331,17 +339,16 @@ class ChampionDetector:
             
         return zone_hits
     
-    def _is_hit_in_original_zone(self, hit: Tuple, zone: Zone, offset_x: int, offset_y: int) -> bool:
+    def _is_hit_in_original_zone(self, hit: ChampionHit, zone: Zone, offset_x: int, offset_y: int) -> bool:
         """Check if a hit (after coordinate adjustment) is within the original zone."""
-        _, rect, _ = hit
-        hx, hy, hw, hh = rect
-        center_x = hx + offset_x + hw // 2
-        center_y = hy + offset_y + hh // 2
+        bbox = hit.bbox
+        center_x = bbox.x + offset_x + bbox.width // 2
+        center_y = bbox.y + offset_y + bbox.height // 2
         
         return (zone.x <= center_x <= zone.x + zone.width and 
                 zone.y <= center_y <= zone.y + zone.height)
 
-    def visualize_hits(self, input_image: np.ndarray, hits: List[Tuple[str, Tuple[int, int, int, int], float]]) -> np.ndarray:
+    def visualize_hits(self, input_image: np.ndarray, hits: List[ChampionHit]) -> np.ndarray:
         """Visualize detection hits on the image with zone overlays."""
         if input_image is None:
             raise ValueError("Input image is None")
@@ -352,7 +359,11 @@ class ChampionDetector:
         else:
             display_image = input_image.copy()
             
-        Overlay = MTM.drawBoxesOnRGB(display_image, hits, showLabel=True)
+        # Convert ChampionHit objects to tuple format for MTM library
+        hit_tuples = [(hit.template_name, (hit.bbox.x, hit.bbox.y, hit.bbox.width, hit.bbox.height), hit.confidence) 
+                      for hit in hits]
+        
+        Overlay = MTM.drawBoxesOnRGB(display_image, hit_tuples, showLabel=True)
         # Draw zones if provided
         if self.zones:
             # Get image dimensions for coordinate conversion

@@ -1,10 +1,98 @@
 """
 Coordinate transformation utilities for League of Legends detection.
 """
-from typing import List, Tuple, Dict, Any, Optional, Callable
+from typing import List, Tuple, Dict, Any, Optional, Callable, TypedDict, NamedTuple, TYPE_CHECKING
 import logging
+import numpy as np
+
+if TYPE_CHECKING:
+    from .champion_detector import ChampionHit
 
 logger = logging.getLogger(__name__)
+
+
+# Specific tuple types for better type safety
+class BoundingBox(NamedTuple):
+    """Bounding box coordinates (x, y, width, height)."""
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+class Point(NamedTuple):
+    """2D point coordinates."""
+    x: int
+    y: int
+
+
+class Size(NamedTuple):
+    """Image or region size."""
+    width: int
+    height: int
+
+
+class Offset(NamedTuple):
+    """2D offset coordinates."""
+    x: int
+    y: int
+
+
+class CropRegion(TypedDict):
+    """Crop region information."""
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+class DetectionInfo(TypedDict):
+    """OCR detection information."""
+    text: str
+    confidence: float
+    bbox: BoundingBox
+    coordinates: List[List[int]]
+
+
+class CropInfo(TypedDict):
+    """Information about OCR cropping operation."""
+    success: bool
+    cropped_image: Optional[np.ndarray]
+    crop_region: CropRegion
+    detection_info: Optional[DetectionInfo]
+    offset: Offset
+    scale_factor: float
+    original_size: Size
+
+
+class ProcessingStats(TypedDict):
+    """Performance statistics for the detection pipeline."""
+    ocr_time_ms: float
+    detection_time_ms: float
+    total_time_ms: float
+    champions_detected: int
+    ocr_success: bool
+
+
+class ChampionDetection(TypedDict):
+    """Champion detection result."""
+    champion_name: str
+    confidence: float
+    x: int
+    y: int
+    width: int
+    height: int
+    original_rect: BoundingBox
+    zone: Optional[str]
+
+
+class PipelineResult(TypedDict):
+    """Complete pipeline detection result."""
+    champions: List[ChampionDetection]
+    crop_info: CropInfo
+    coordinate_transformer: 'CoordinateTransformer'
+    processing_stats: ProcessingStats
+    visualization_image: np.ndarray
 
 
 class CoordinateTransformer:
@@ -12,7 +100,7 @@ class CoordinateTransformer:
     Handles coordinate transformations between original and cropped images.
     """
     
-    def __init__(self, crop_info: Dict[str, Any]):
+    def __init__(self, crop_info: CropInfo):
         """
         Initialize with crop information from OCR detection.
         
@@ -21,11 +109,13 @@ class CoordinateTransformer:
         """
         self.crop_info = crop_info
         self.is_cropped = crop_info.get('success', False)
-        self.offset_x, self.offset_y = crop_info.get('offset', (0, 0))
+        offset = crop_info.get('offset', Offset(x=0, y=0))
+        self.offset_x, self.offset_y = offset.x, offset.y
         self.scale_factor = crop_info.get('scale_factor', 1.0)
-        self.original_size = crop_info.get('original_size', (1920, 1080))
+        original_size = crop_info.get('original_size', Size(width=1920, height=1080))
+        self.original_size = (original_size.width, original_size.height)
     
-    def transform_to_original(self, x: int, y: int, width: int, height: int) -> Tuple[int, int, int, int]:
+    def transform_to_original(self, x: int, y: int, width: int, height: int) -> BoundingBox:
         """
         Transform coordinates from cropped image back to original image.
         
@@ -36,17 +126,17 @@ class CoordinateTransformer:
             Transformed coordinates for original image
         """
         if not self.is_cropped:
-            return x, y, width, height
+            return BoundingBox(x=x, y=y, width=width, height=height)
         
         # Add offset to restore original position
         orig_x = x + self.offset_x
         orig_y = y + self.offset_y
         
-        return orig_x, orig_y, width, height
+        return BoundingBox(x=orig_x, y=orig_y, width=width, height=height)
     
-    def get_original_dimensions(self) -> Tuple[int, int]:
+    def get_original_dimensions(self) -> Size:
         """Get original image dimensions."""
-        return self.original_size
+        return Size(width=self.original_size[0], height=self.original_size[1])
     
     def should_adjust_zones(self) -> bool:
         """Check if zones need adjustment based on scale factor."""
@@ -88,7 +178,7 @@ class LeagueDetectionPipeline:
         use_parallel: bool = True,
         ocr_target_text: str = "PICK YOUR CHAMPION",
         ocr_min_confidence: float = 0.7
-    ) -> Dict[str, Any]:
+    ) -> PipelineResult:
         """
         Run the complete detection pipeline: OCR → Crop → Champion Detection.
         
@@ -129,21 +219,21 @@ class LeagueDetectionPipeline:
             
             # Return empty results with original image
             original_height, original_width = image.shape[:2]
-            processing_stats = {
+            processing_stats: ProcessingStats = {
                 'ocr_time_ms': (ocr_time - start_time) * 1000,
-                'champion_detection_time_ms': 0,
-                'coordinate_transform_time_ms': 0,
-                'visualization_time_ms': 0,
-                'total_time_ms': (ocr_time - start_time) * 1000
+                'detection_time_ms': 0.0,
+                'total_time_ms': (ocr_time - start_time) * 1000,
+                'champions_detected': 0,
+                'ocr_success': False
             }
             
-            return {
-                'champions': [],
-                'crop_info': crop_result,
-                'coordinate_transformer': CoordinateTransformer(crop_result),
-                'processing_stats': processing_stats,
-                'visualization_image': image.copy()  # Return original image as visualization
-            }
+            return PipelineResult(
+                champions=[],
+                crop_info=crop_result,
+                coordinate_transformer=CoordinateTransformer(crop_result),
+                processing_stats=processing_stats,
+                visualization_image=image.copy()  # Return original image as visualization
+            )
         
         cropped_image = crop_result['cropped_image']
         coordinate_transformer = CoordinateTransformer(crop_result)
@@ -163,25 +253,26 @@ class LeagueDetectionPipeline:
         detection_time = time.time()
         
         # Step 3: Transform Coordinates Back to Original Image
-        transformed_champions = []
+        transformed_champions: List[ChampionDetection] = []
         for hit in hits:
-            template_key, rect, confidence = hit
-            champion_name = template_key.split('_scale_')[0]
-            x, y, w, h = rect
+            champion_name = hit.template_name.split('_scale_')[0]
+            x, y, w, h = hit.bbox.x, hit.bbox.y, hit.bbox.width, hit.bbox.height
             
             # Transform coordinates back to original image
-            orig_x, orig_y, orig_w, orig_h = coordinate_transformer.transform_to_original(x, y, w, h)
+            original_bbox = coordinate_transformer.transform_to_original(x, y, w, h)
+            orig_x, orig_y, orig_w, orig_h = original_bbox.x, original_bbox.y, original_bbox.width, original_bbox.height
             
-            transformed_champions.append({
+            champion_detection: ChampionDetection = {
                 'champion_name': champion_name,
-                'confidence': float(confidence),
+                'confidence': float(hit.confidence),
                 'x': int(orig_x),
                 'y': int(orig_y),
                 'width': int(orig_w),
                 'height': int(orig_h),
-                'original_rect': (x, y, w, h),  # Keep original for visualization
+                'original_rect': BoundingBox(x=x, y=y, width=w, height=h),  # Keep original for visualization
                 'zone': None  # Will be determined by caller if needed
-            })
+            }
+            transformed_champions.append(champion_detection)
         
         # Step 4: Generate Visualization
         visualization_image = self._create_visualization(
@@ -191,17 +282,19 @@ class LeagueDetectionPipeline:
         total_time = time.time()
         
         # Compile results
-        result = {
+        processing_stats: ProcessingStats = {
+            'ocr_time_ms': (ocr_time - start_time) * 1000,
+            'detection_time_ms': (detection_time - ocr_time) * 1000,
+            'total_time_ms': (total_time - start_time) * 1000,
+            'champions_detected': len(transformed_champions),
+            'ocr_success': crop_result['success']
+        }
+        
+        result: PipelineResult = {
             'champions': transformed_champions,
             'crop_info': crop_result,
             'coordinate_transformer': coordinate_transformer,
-            'processing_stats': {
-                'ocr_time_ms': (ocr_time - start_time) * 1000,
-                'detection_time_ms': (detection_time - ocr_time) * 1000,
-                'total_time_ms': (total_time - start_time) * 1000,
-                'champions_detected': len(transformed_champions),
-                'ocr_success': crop_result['success']
-            },
+            'processing_stats': processing_stats,
             'visualization_image': visualization_image
         }
         
@@ -244,11 +337,11 @@ class LeagueDetectionPipeline:
         
         # Draw champion detections (transformed back to original coordinates)
         for hit in hits:
-            template_key, rect, confidence = hit
-            x, y, w, h = rect
+            x, y, w, h = hit.bbox.x, hit.bbox.y, hit.bbox.width, hit.bbox.height
             
             # Transform to original coordinates
-            orig_x, orig_y, orig_w, orig_h = transformer.transform_to_original(x, y, w, h)
+            original_bbox = transformer.transform_to_original(x, y, w, h)
+            orig_x, orig_y, orig_w, orig_h = original_bbox.x, original_bbox.y, original_bbox.width, original_bbox.height
             
             # Draw bounding box
             cv2.rectangle(
@@ -260,8 +353,8 @@ class LeagueDetectionPipeline:
             )
             
             # Add label
-            champion_name = template_key.split('_scale_')[0]
-            label = f"{champion_name} ({confidence:.2f})"
+            champion_name = hit.template_name.split('_scale_')[0]
+            label = f"{champion_name} ({hit.confidence:.2f})"
             cv2.putText(
                 vis_image,
                 label,

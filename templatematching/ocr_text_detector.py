@@ -97,10 +97,15 @@ class OCRTextDetector:
     def _initialize_reader(self) -> None:
         """Initialize EasyOCR reader with specified languages."""
         try:
+            import os
+            project_dir = os.path.dirname(os.path.abspath(__file__))
+            model_storage_directory = os.path.join(project_dir, '..', '.EasyOCR')
+            os.makedirs(model_storage_directory, exist_ok=True)
             self.reader = easyocr.Reader(
                 [lang.value for lang in self.config.languages],
                 gpu=self.gpu,
-                verbose=self.verbose
+                verbose=self.verbose,
+                model_storage_directory=model_storage_directory
             )
             logger.info("EasyOCR reader initialized successfully")
         except Exception as e:

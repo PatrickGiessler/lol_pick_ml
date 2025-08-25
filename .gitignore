@@ -4,3 +4,4 @@ model/saved_model/**
 data/**
 .conda/**
 .DS_Store
+.EasyOCR/**

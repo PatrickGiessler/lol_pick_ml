@@ -43,16 +43,12 @@ logger = logging.getLogger(__name__)
 # Thread pool for CPU-intensive operations
 executor = ThreadPoolExecutor(max_workers=4)
 
-# Global detection pipeline instance
-detection_pipeline = None
-
 router = APIRouter()
 
 
 # Preload commonly used models at startup
 def preload_models():
     """Preload commonly used models to improve response times."""
-    global detection_pipeline
     
     common_models = ["model/saved_model/test.keras", "model/saved_model/15.11.1.keras"]
     model_manager.preload_models(common_models)
@@ -69,30 +65,18 @@ def preload_models():
         }
     )
     
-    # Initialize the detection pipeline
+    # Initialize the detection pipeline through model_manager
     try:
-        # Create enhanced OCR detector with LoL optimized settings
-        ocr_detector = EnhancedOCRTextDetector(config=config, gpu=True, verbose=False)
-        ocr_detector.apply_preset("lol_optimized")
-        
-        # Champion detector factory function
-        def champion_detector_factory(version="15.11.1", confidence_threshold=0.8, zones=None):
-            if zones is None:
-                zones = Zone.get_default_zones()
-            return ChampionDetector(
-                version=version,
-                confidence_threshold=confidence_threshold,
-                zones=zones
-            )
-        
-        # Initialize the detection pipeline
-        detection_pipeline = LeagueDetectionPipeline(ocr_detector, champion_detector_factory)
-        
-        logger.info("Detection pipeline initialized successfully")
+        model_manager.initialize_detection_pipeline(
+            ocr_config=config,
+            gpu=True,
+            verbose=False,
+            use_enhanced_ocr=True
+        )
+        logger.info("Detection pipeline initialized successfully through model_manager")
         
     except Exception as e:
         logger.error(f"Failed to initialize detection pipeline: {e}")
-        detection_pipeline = None
 
 
 # Call preload when module is imported
@@ -480,10 +464,13 @@ def _detect_champions(request: DetectionRequest) -> DetectionResponse:
         image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         height, width = image_cv.shape[:2]
 
-        # Check if detection pipeline is available
+        # Get detection pipeline from model_manager
+        detection_pipeline = model_manager.get_detection_pipeline()
         if detection_pipeline is None:
-            logger.warning("Detection pipeline not available, falling back to basic detection")
-            return _detect_champions_fallback(request, image_cv, height, width, start_time)
+            raise HTTPException(
+                status_code=500, 
+                detail="Detection pipeline not available. Please contact administrator."
+            )
 
         # Create zones (use custom or default)
         zones = None
@@ -503,54 +490,47 @@ def _detect_champions(request: DetectionRequest) -> DetectionResponse:
 
         # Convert pipeline results to API format
         detection_hits = []
-        for champion_data in pipeline_result['champions']:
-            # Determine which zone this hit belongs to (if zones were provided)
-            hit_zone = champion_data.get('zone')
-            if hit_zone is None and zones:
-                center_x = champion_data['x'] + champion_data['width'] // 2
-                center_y = champion_data['y'] + champion_data['height'] // 2
-                for zone in zones:
-                    abs_zone = zone.to_absolute(width, height)
-                    if (abs_zone.x <= center_x <= abs_zone.x + abs_zone.width and
-                        abs_zone.y <= center_y <= abs_zone.y + abs_zone.height):
-                        hit_zone = zone.label
-                        break
+        if pipeline_result['champions']:
+            for champion_data in pipeline_result['champions']:
+                # Determine which zone this hit belongs to (if zones were provided)
+                hit_zone = champion_data.get('zone')
+                if hit_zone is None and zones:
+                    center_x = champion_data['x'] + champion_data['width'] // 2
+                    center_y = champion_data['y'] + champion_data['height'] // 2
+                    for zone in zones:
+                        abs_zone = zone.to_absolute(width, height)
+                        if (abs_zone.x <= center_x <= abs_zone.x + abs_zone.width and
+                            abs_zone.y <= center_y <= abs_zone.y + abs_zone.height):
+                            hit_zone = zone.label
+                            break
 
-            detection_hits.append(
-                DetectionHit(
-                    champion_name=champion_data['champion_name'],
-                    confidence=champion_data['confidence'],
-                    x=champion_data['x'],
-                    y=champion_data['y'],
-                    width=champion_data['width'],
-                    height=champion_data['height'],
-                    zone=hit_zone,
+                detection_hits.append(
+                    DetectionHit(
+                        champion_name=champion_data['champion_name'],
+                        confidence=champion_data['confidence'],
+                        x=champion_data['x'],
+                        y=champion_data['y'],
+                        width=champion_data['width'],
+                        height=champion_data['height'],
+                        zone=hit_zone,
+                    )
                 )
-            )
 
-        # Save the visualization image
-        visualization_image = pipeline_result['visualization_image']
-        result_image_path = f"templatematching/images/result/detection_result_{int(time.time())}.png"
-        
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(result_image_path), exist_ok=True)
-        cv2.imwrite(result_image_path, visualization_image)
-
-        # Encode result image to base64
+        # Convert visualization image to base64
+        visualization_image: np.ndarray = pipeline_result['visualization_image']
         result_image_base64 = None
         try:
-            with open(result_image_path, "rb") as f:
-                result_image_base64 = base64.b64encode(f.read()).decode("utf-8")
+            # Encode the OpenCV image (BGR) to PNG format in memory
+            success, encoded_image = cv2.imencode('.png', visualization_image)
+            if success:
+                # Convert to base64 string
+                result_image_base64 = base64.b64encode(encoded_image.tobytes()).decode('utf-8')
+            else:
+                logger.warning("Failed to encode visualization image to PNG")
         except Exception as e:
-            logger.warning(f"Failed to encode result image: {e}")
-
+            logger.warning(f"Failed to convert visualization image to base64: {e}")
+        
         processing_time = pipeline_result['processing_stats']['total_time_ms']
-
-        logger.info(
-            f"Pipeline detection completed: {len(detection_hits)} champions detected, "
-            f"OCR success: {pipeline_result['processing_stats']['ocr_success']}, "
-            f"processing time: {processing_time:.1f}ms"
-        )
 
         return DetectionResponse(
             hits=detection_hits,
@@ -569,91 +549,6 @@ def _detect_champions(request: DetectionRequest) -> DetectionResponse:
         )
         raise
 
-
-def _detect_champions_fallback(request: DetectionRequest, image_cv, height, width, start_time) -> DetectionResponse:
-    """Fallback to basic detection when pipeline is not available"""
-    import time
-    
-    try:
-        # Create zones (use custom or default)
-        if request.zones:
-            zones = [detection_zone_to_zone(dz) for dz in request.zones]
-        else:
-            zones = Zone.get_default_zones()
-
-        # Initialize detector
-        detector = ChampionDetector(
-            version=request.version or "15.11.1",
-            confidence_threshold=request.confidence_threshold or 0.65,
-            zones=zones,
-        )
-
-        # Perform detection
-        hits = detector.process_image(
-            image_cv, use_parallel=request.use_parallel or True
-        )
-
-        # Convert hits to API format
-        detection_hits = []
-        for hit in hits:
-            template_key, rect, confidence = hit
-            champion_name = template_key.split("_scale_")[0]
-            x, y, w, h = rect
-
-            # Determine which zone this hit belongs to
-            center_x, center_y = x + w // 2, y + h // 2
-            hit_zone = None
-            for zone in zones:
-                abs_zone = zone.to_absolute(width, height)
-                if (
-                    abs_zone.x <= center_x <= abs_zone.x + abs_zone.width
-                    and abs_zone.y <= center_y <= abs_zone.y + abs_zone.height
-                ):
-                    hit_zone = zone.label
-                    break
-
-            detection_hits.append(
-                DetectionHit(
-                    champion_name=champion_name,
-                    confidence=float(confidence),
-                    x=int(x),
-                    y=int(y),
-                    width=int(w),
-                    height=int(h),
-                    zone=hit_zone,
-                )
-            )
-
-        # Generate result image with annotations
-        detector.visualize_hits(image_cv, hits)
-
-        # Read the result image and encode to base64
-        result_image_path = detector.output_path
-        result_image_base64 = None
-        try:
-            with open(result_image_path, "rb") as f:
-                result_image_base64 = base64.b64encode(f.read()).decode("utf-8")
-        except Exception as e:
-            logger.warning(f"Failed to encode result image: {e}")
-
-        processing_time = (time.time() - start_time) * 1000
-
-        return DetectionResponse(
-            hits=detection_hits,
-            total_detections=len(detection_hits),
-            image_resolution=(width, height),
-            zones_processed=len(zones),
-            processing_time_ms=processing_time,
-            result_image_base64=result_image_base64,
-        )
-    
-    except Exception as e:
-        processing_time = (time.time() - start_time) * 1000
-        logger.error(
-            f"Fallback detection failed after {processing_time:.2f}ms",
-            extra={"error_type": type(e).__name__, "error_message": str(e)},
-        )
-        raise
 
 
 @router.post("/detect/champions/upload", response_model=DetectionResponse)
@@ -766,41 +661,14 @@ async def get_pipeline_status():
     Get the status of the detection pipeline.
     """
     try:
-        global detection_pipeline
+        # Get pipeline status from model_manager
+        pipeline_status = model_manager.get_pipeline_status()
         
         result = {
             "status": "ok",
-            "pipeline_info": {
-                "pipeline_available": detection_pipeline is not None,
-                "uses_ocr_preprocessing": detection_pipeline is not None,
-                "fallback_available": True,
-            },
+            "pipeline_info": pipeline_status,
             "description": "Detection pipeline uses OCR preprocessing for better accuracy"
         }
-        
-        if detection_pipeline is not None:
-            # Get OCR detector info
-            ocr_detector = detection_pipeline.ocr_detector
-            
-            # Add OCR configuration details
-            ocr_config = {
-                "target_text": ocr_detector.config.target_text,
-                "min_confidence": ocr_detector.config.min_confidence,
-                "languages": [lang.value for lang in ocr_detector.config.languages],
-                "case_sensitive": ocr_detector.config.case_sensitive,
-            }
-            
-            preprocessing_method = getattr(ocr_detector, 'preprocessing_method', None)
-            method_value = preprocessing_method.value if preprocessing_method else None
-            
-            additional_info = {
-                "ocr_config": ocr_config,
-                "preprocessing_enabled": getattr(ocr_detector, 'enable_preprocessing', False),
-                "preprocessing_method": method_value,
-                "gpu_enabled": ocr_detector.gpu
-            }
-            
-            result["pipeline_info"].update(additional_info)
         
         return result
         

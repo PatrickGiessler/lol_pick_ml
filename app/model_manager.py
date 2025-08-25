@@ -10,6 +10,9 @@ from keras.models import Model
 from keras import saving
 from train.trainer import custom_loss, weighted_loss, adaptive_loss
 from templatematching.ocr_text_detector import OCRTextDetector, OCRConfig, OCRLanguage
+from templatematching.enhanced_ocr_detector import EnhancedOCRTextDetector
+from templatematching.detection_pipeline import LeagueDetectionPipeline
+from templatematching.champion_detector import ChampionDetector, Zone
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,7 @@ class ModelManager:
     _instance: Optional['ModelManager'] = None
     _models: Dict[str, Any] = {}
     _ocr_detectors: Dict[str, OCRTextDetector] = {}
+    _detection_pipeline: Optional[LeagueDetectionPipeline] = None
     _custom_objects = {
         "custom_loss": custom_loss,
         "weighted_loss": weighted_loss,
@@ -36,7 +40,7 @@ class ModelManager:
         """Initialize the model manager."""
         if not hasattr(self, '_initialized'):
             self._initialized = True
-            logger.info("ModelManager initialized with ML models and OCR detector support")
+            logger.info("ModelManager initialized with ML models, OCR detectors, and detection pipeline support")
     
     def get_model(self, model_path: str) -> Any:
         """
@@ -348,6 +352,180 @@ class ModelManager:
         
         logger.warning(f"OCR detector not found in cache: {detector_id}")
         return False
+
+    def get_detection_pipeline(self) -> Optional[LeagueDetectionPipeline]:
+        """
+        Get the cached detection pipeline.
+        
+        Returns:
+            Detection pipeline instance or None if not initialized
+        """
+        return self._detection_pipeline
+
+    def initialize_detection_pipeline(
+        self,
+        ocr_config: Optional[OCRConfig] = None,
+        gpu: bool = True,
+        verbose: bool = False,
+        use_enhanced_ocr: bool = True
+    ) -> LeagueDetectionPipeline:
+        """
+        Initialize the detection pipeline with OCR preprocessing.
+        
+        Args:
+            ocr_config: Configuration for OCR detector
+            gpu: Whether to use GPU acceleration
+            verbose: Whether to enable verbose logging
+            use_enhanced_ocr: Whether to use enhanced OCR with preprocessing
+            
+        Returns:
+            Initialized detection pipeline
+            
+        Raises:
+            RuntimeError: If pipeline initialization fails
+        """
+        logger.info("Initializing detection pipeline...")
+        
+        try:
+            # Use default config if none provided
+            if ocr_config is None:
+                ocr_config = OCRConfig(
+                    languages=[OCRLanguage.ENGLISH, OCRLanguage.GERMAN, OCRLanguage.SPANISH],
+                    min_confidence=0.7,
+                    target_text="pick your champion",
+                    case_sensitive=False,
+                )
+            
+            # Create OCR detector
+            if use_enhanced_ocr:
+                ocr_detector = EnhancedOCRTextDetector(config=ocr_config, gpu=gpu, verbose=verbose)
+                ocr_detector.apply_preset("lol_optimized")
+                logger.info("Using enhanced OCR detector with LoL optimizations")
+            else:
+                ocr_detector = OCRTextDetector(config=ocr_config, gpu=gpu, verbose=verbose)
+                logger.info("Using standard OCR detector")
+            
+            # Champion detector factory function
+            def champion_detector_factory(version="15.11.1", confidence_threshold=0.8, zones=None):
+                if zones is None:
+                    zones = Zone.get_default_zones()
+                return ChampionDetector(
+                    version=version,
+                    confidence_threshold=confidence_threshold,
+                    zones=zones
+                )
+            
+            # Initialize the detection pipeline
+            self._detection_pipeline = LeagueDetectionPipeline(ocr_detector, champion_detector_factory)
+            
+            logger.info("Detection pipeline initialized successfully", extra={
+                "ocr_type": "enhanced" if use_enhanced_ocr else "standard",
+                "gpu_enabled": gpu,
+                "target_text": ocr_config.target_text,
+                "languages": [lang.value for lang in ocr_config.languages]
+            })
+            
+            return self._detection_pipeline
+            
+        except Exception as e:
+            logger.error("Failed to initialize detection pipeline", extra={
+                "error_type": type(e).__name__,
+                "error_message": str(e)
+            }, exc_info=True)
+            self._detection_pipeline = None
+            raise RuntimeError(f"Failed to initialize detection pipeline: {str(e)}")
+
+    def get_or_create_detection_pipeline(
+        self,
+        ocr_config: Optional[OCRConfig] = None,
+        gpu: bool = True,
+        verbose: bool = False,
+        use_enhanced_ocr: bool = True
+    ) -> LeagueDetectionPipeline:
+        """
+        Get the detection pipeline, creating it if it doesn't exist.
+        
+        Args:
+            ocr_config: Configuration for OCR detector (only used if creating new pipeline)
+            gpu: Whether to use GPU acceleration (only used if creating new pipeline)
+            verbose: Whether to enable verbose logging (only used if creating new pipeline)
+            use_enhanced_ocr: Whether to use enhanced OCR (only used if creating new pipeline)
+            
+        Returns:
+            Detection pipeline instance
+        """
+        if self._detection_pipeline is None:
+            return self.initialize_detection_pipeline(ocr_config, gpu, verbose, use_enhanced_ocr)
+        return self._detection_pipeline
+
+    def clear_detection_pipeline(self) -> None:
+        """Clear the detection pipeline cache."""
+        if self._detection_pipeline is not None:
+            logger.info("Clearing detection pipeline cache")
+            self._detection_pipeline = None
+            logger.info("Detection pipeline cache cleared")
+        else:
+            logger.debug("Detection pipeline cache already empty")
+
+    def get_pipeline_status(self) -> Dict[str, Any]:
+        """
+        Get the status and configuration of the detection pipeline.
+        
+        Returns:
+            Dictionary containing pipeline status information
+        """
+        if self._detection_pipeline is None:
+            return {
+                "initialized": False,
+                "available": False,
+                "status": "not_initialized"
+            }
+        
+        try:
+            ocr_detector = self._detection_pipeline.ocr_detector
+            
+            # Get OCR configuration details
+            ocr_config = {
+                "target_text": ocr_detector.config.target_text,
+                "min_confidence": ocr_detector.config.min_confidence,
+                "languages": [lang.value for lang in ocr_detector.config.languages],
+                "case_sensitive": ocr_detector.config.case_sensitive,
+            }
+            
+            # Check if it's enhanced OCR
+            is_enhanced = isinstance(ocr_detector, EnhancedOCRTextDetector)
+            preprocessing_method = None
+            preprocessing_enabled = False
+            
+            if is_enhanced:
+                preprocessing_method = getattr(ocr_detector, 'preprocessing_method', None)
+                preprocessing_method = preprocessing_method.value if preprocessing_method else None
+                preprocessing_enabled = getattr(ocr_detector, 'enable_preprocessing', False)
+            
+            return {
+                "initialized": True,
+                "available": True,
+                "status": "ready",
+                "ocr_type": "enhanced" if is_enhanced else "standard",
+                "ocr_config": ocr_config,
+                "preprocessing_enabled": preprocessing_enabled,
+                "preprocessing_method": preprocessing_method,
+                "gpu_enabled": ocr_detector.gpu,
+                "uses_ocr_preprocessing": True,
+                "fallback_available": True
+            }
+            
+        except Exception as e:
+            logger.error("Failed to get pipeline status", extra={
+                "error_type": type(e).__name__,
+                "error_message": str(e)
+            })
+            return {
+                "initialized": True,
+                "available": False,
+                "status": "error",
+                "error": str(e)
+            }
 
 
 # Global instance for easy access

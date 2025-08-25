@@ -4,8 +4,6 @@ FastAPI REST API for League of Legends Champion Detection
 Provides endpoints for real-time champion detection from game screenshots
 """
 
-import asyncio
-import base64
 import io
 import time
 from typing import List, Optional, Dict, Any
@@ -324,74 +322,7 @@ async def detect_champions(
             message=f"Error: {str(e)}"
         )
 
-@app.post("/detect-with-visualization")
-async def detect_with_visualization(
-    file: UploadFile = File(...),
-    config: Optional[str] = Query(None)
-):
-    """
-    Detect champions and return visualization image
-    Returns the original detection response plus a visualization image
-    """
-    # First perform normal detection
-    detection_response = await detect_champions(file, config)
-    
-    if not detection_response.success:
-        return detection_response
-    
-    try:
-        # Re-read image for visualization (file pointer is at end)
-        await file.seek(0)
-        image_data = await file.read()
-        opencv_image = await process_image_data(image_data)
-        
-        # Create visualization
-        if detector is not None:
-            hits = []
-            for det in detection_response.detections:
-                coords = det.coordinates
-                rect = (coords["x"], coords["y"], coords["width"], coords["height"])
-                hit = (det.template_key, rect, det.confidence)
-                hits.append(hit)
-            
-            detector.visualize_hits(opencv_image, hits)
-            
-            # Return both JSON response and indicate visualization is available
-            return {
-                **detection_response.dict(),
-                "visualization_available": True,
-                "visualization_path": detector.output_path
-            }
-        else:
-            return {
-                **detection_response.dict(),
-                "visualization_available": False,
-                "visualization_error": "Detector not available"
-            }
-        
-    except Exception as e:
-        logger.error(f"Visualization error: {e}")
-        return {
-            **detection_response.dict(),
-            "visualization_available": False,
-            "visualization_error": str(e)
-        }
 
-@app.get("/visualization")
-async def get_visualization():
-    """Get the latest visualization image"""
-    if not detector or not detector.output_path:
-        raise HTTPException(status_code=404, detail="No visualization available")
-    
-    visualization_path = Path(detector.output_path)
-    if not visualization_path.exists():
-        raise HTTPException(status_code=404, detail="Visualization file not found")
-    
-    return FileResponse(
-        str(visualization_path),
-        media_type="image/png",
-        filename="detection_result.png"
-    )
 
 @app.get("/zones")
 async def get_zones():

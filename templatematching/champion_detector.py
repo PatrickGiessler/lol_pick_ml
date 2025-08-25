@@ -165,7 +165,6 @@ class ChampionDetector:
         self.zones = zones
         self.max_workers = max_workers
         self._load_champion_templates()
-        self.output_path = "templatematching/images/result/detection_result.png"
         self.set_confidence_threshold(confidence_threshold)
         
         # Cache for preprocessed images to avoid repeated conversions
@@ -342,7 +341,7 @@ class ChampionDetector:
         return (zone.x <= center_x <= zone.x + zone.width and 
                 zone.y <= center_y <= zone.y + zone.height)
 
-    def visualize_hits(self, input_image: np.ndarray, hits: List[Tuple[str, Tuple[int, int, int, int], float]]):
+    def visualize_hits(self, input_image: np.ndarray, hits: List[Tuple[str, Tuple[int, int, int, int], float]]) -> np.ndarray:
         """Visualize detection hits on the image with zone overlays."""
         if input_image is None:
             raise ValueError("Input image is None")
@@ -395,8 +394,9 @@ class ChampionDetector:
                     thickness,
                     cv2.LINE_AA
                 )
+        return Overlay
        
-        cv2.imwrite(self.output_path, Overlay)
+
     def set_confidence_threshold(self, threshold: float) -> None:
         """
         Update the confidence threshold for template matching

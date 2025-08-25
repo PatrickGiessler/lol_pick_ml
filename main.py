@@ -30,18 +30,23 @@ print("🖥️ STDOUT: Direct print test - if you see this, stdout works", flush
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize models and connections on startup."""
+    print("🔄 Starting lifespan context manager...", flush=True)
     logger.info("Starting up application...")
     
     # Preload commonly used models
     try:
+        print("🤖 Initializing model manager...", flush=True)
         common_models = [
             "model/saved_model/test.keras",
             "model/saved_model/15.11.1.keras"
         ]
         logger.info(f"Preloading {len(common_models)} ML models...")
+        print(f"📦 Loading models: {common_models}", flush=True)
         model_manager.preload_models(common_models)
+        print("✅ Models preloaded successfully", flush=True)
         
         # Preload OCR detectors
+        print("👁️ Initializing OCR detectors...", flush=True)
         preload_configs = {
             "high_accuracy": {
                 "config": OCRConfig(
@@ -55,10 +60,13 @@ async def lifespan(app: FastAPI):
             }
         }
         logger.info(f"Preloading {len(preload_configs)} OCR detectors...")
+        print(f"🔍 Loading OCR detectors: {list(preload_configs.keys())}", flush=True)
         model_manager.preload_ocr_detectors(preload_configs)
+        print("✅ OCR detectors preloaded successfully", flush=True)
         
         # Initialize detection pipeline
         try:
+            print("🔍 Initializing detection pipeline...", flush=True)
             logger.info("Initializing detection pipeline...")
             config = OCRConfig(
                 languages=[OCRLanguage.ENGLISH, OCRLanguage.GERMAN, OCRLanguage.SPANISH],
@@ -66,6 +74,7 @@ async def lifespan(app: FastAPI):
                 target_text="pick your champion",
                 case_sensitive=False,
             )
+            print("📋 OCR config created", flush=True)
             
             pipeline = model_manager.initialize_detection_pipeline(
                 ocr_config=config,
@@ -73,22 +82,28 @@ async def lifespan(app: FastAPI):
                 verbose=False,
                 use_enhanced_ocr=True
             )
+            print("🔄 Pipeline initialization complete", flush=True)
             
             pipeline_status = model_manager.get_pipeline_status()
+            print(f"📊 Pipeline status: {pipeline_status}", flush=True)
             logger.info("Detection pipeline initialized successfully", extra={
                 "pipeline_status": pipeline_status,
                 "ocr_type": pipeline_status.get("ocr_type", "unknown"),
                 "gpu_enabled": pipeline_status.get("gpu_enabled", False)
             })
+            print("✅ Detection pipeline initialized successfully", flush=True)
             
         except Exception as e:
+            print(f"❌ Failed to initialize detection pipeline: {e}", flush=True)
             logger.error(f"Failed to initialize detection pipeline: {e}", exc_info=True)
             # Don't fail startup, but log the issue prominently
             logger.warning("Application will start without detection pipeline!")
 
+        print("✅ Model and pipeline preloading completed successfully", flush=True)
         logger.info("Model and pipeline preloading completed successfully")
         
     except Exception as e:
+        print(f"⚠️ Failed to preload some models: {e}", flush=True)
         logger.warning(f"Failed to preload some models: {e}", exc_info=True)
     
     logger.info("Application startup completed successfully")
